@@ -344,10 +344,11 @@ class _OnaylaButon(discord.ui.Button):
             rol_idler.append(KIZ_ROL_ID)
 
         verilecek_roller = [guild.get_role(rid) for rid in rol_idler if guild.get_role(rid) is not None]
+        rol_hatasi = False
         try:
             await uye.add_roles(*verilecek_roller, reason="Kayıt onaylandı")
         except discord.Forbidden:
-            pass
+            rol_hatasi = True
 
         # Kayıtsız rolünü al
         kayitsiz_rol = guild.get_role(KAYITSIZ_ROL_ID)
@@ -425,10 +426,17 @@ class _OnaylaButon(discord.ui.Button):
         )
         yeni_embed.color = discord.Color.green()
         await interaction.message.edit(embed=yeni_embed, view=None)
-        await interaction.followup.send(
-            f"✅ {uye.mention} kullanıcısı onaylandı. Roller verildi ve ismi `{yeni_nick}` olarak güncellendi.",
-            ephemeral=True
-        )
+        if rol_hatasi:
+            await interaction.followup.send(
+                f"⚠️ {uye.mention} onaylandı ancak **roller verilemedi!** Botun rolü hiyerarşide yeterince üstte değil. "
+                f"Lütfen Discord Sunucu Ayarları → Roller bölümünde botun rolünü `Üye`, `Whitelist` ve `Kayıtsız` rollerinin ÜSTÜNE taşıyın.",
+                ephemeral=True
+            )
+        else:
+            await interaction.followup.send(
+                f"✅ {uye.mention} kullanıcısı onaylandı. Roller verildi ve ismi `{yeni_nick}` olarak güncellendi.",
+                ephemeral=True
+            )
 
 
 class _ReddetButon(discord.ui.Button):

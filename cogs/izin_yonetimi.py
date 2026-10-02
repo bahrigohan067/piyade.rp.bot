@@ -50,17 +50,33 @@ class RolIzinView(discord.ui.View):
     async def toggle_perm(self, interaction: discord.Interaction, perm_name: str, display_name: str):
         if not interaction.user.guild_permissions.administrator:
             return await interaction.response.send_message("❌ Sadece yöneticiler izinleri değiştirebilir.", ephemeral=True)
-            
+
+        # GÜVENLİK: @everyone rolüne Yönetici izni verilmesini engelle
+        if self.role == interaction.guild.default_role and perm_name == "administrator":
+            return await interaction.response.send_message(
+                "🚫 **Güvenlik Engeli:** `@everyone` rolüne **Yönetici** izni verilemez! Bu işlem tüm sunucuyu tehlikeye atar.",
+                ephemeral=True
+            )
+
+        # GÜVENLİK: Botun rolünden daha üstteki rollere dokunulmasını engelle
+        if self.role >= interaction.guild.me.top_role:
+            return await interaction.response.send_message(
+                f"🚫 **Hiyerarşi Engeli:** `{self.role.name}` rolü botun kendi rolünden yüksek veya eşit konumda. Bu role müdahale edemem.",
+                ephemeral=True
+            )
+
         perms = self.role.permissions
         current_val = getattr(perms, perm_name)
         setattr(perms, perm_name, not current_val)
-        
+
         try:
             await self.role.edit(permissions=perms, reason=f"{interaction.user} tarafından değiştirildi.")
             durum = "✅ Açıldı" if not current_val else "❌ Kapatıldı"
             await interaction.response.send_message(f"**{self.role.name}** rolü için **{display_name}** izni **{durum}**.", ephemeral=True)
+        except discord.Forbidden:
+            await interaction.response.send_message("❌ Bu rolün izinlerini değiştirme yetkim yetmiyor (rol hiyerarşisi).", ephemeral=True)
         except Exception as e:
-            await interaction.response.send_message(f"❌ Yetkim yetmiyor veya bir hata oluştu: {e}", ephemeral=True)
+            await interaction.response.send_message(f"❌ Bir hata oluştu: {e}", ephemeral=True)
 
     @discord.ui.button(label="Yönetici", emoji="👑", style=discord.ButtonStyle.danger)
     async def btn_admin(self, interaction: discord.Interaction, button: discord.ui.Button):

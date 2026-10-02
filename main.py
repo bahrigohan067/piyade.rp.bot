@@ -58,13 +58,20 @@ class MyBot(commands.Bot):
         self.add_view(DevralView())
         self.add_view(DestekAktifView())
 
-        try:
-            guild = discord.Object(id=GUILD_ID)
-            self.tree.copy_global_to(guild=guild)
-            synced = await self.tree.sync(guild=guild)
-            print(f"{len(synced)} slash komut senkronize edildi.")
-        except Exception as e:
-            print(f"Komut senkronizasyon hatası: {e}")
+        # ── Slash komut senkronizasyonu ──
+        # FORCE_SYNC=true ortam değişkeni varsa senkronize et.
+        # Yoksa mevcut kayıtlı komutları kullan (Rate limit koruması: 200 istek/gün sınırı).
+        force_sync = os.environ.get("FORCE_SYNC", "false").lower() == "true"
+        if force_sync:
+            try:
+                guild = discord.Object(id=GUILD_ID)
+                self.tree.copy_global_to(guild=guild)
+                synced = await self.tree.sync(guild=guild)
+                print(f"{len(synced)} slash komut senkronize edildi.")
+            except Exception as e:
+                print(f"Komut senkronizasyon hatası: {e}")
+        else:
+            print("Slash komutlar senkronize edilmedi (FORCE_SYNC=true değil). Mevcut kayıtlı komutlar kullanılıyor.")
 
 bot = MyBot()
 

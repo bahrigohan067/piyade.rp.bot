@@ -59,7 +59,7 @@ def parse_channel_topic(channel: discord.TextChannel):
 
 
 async def promote_winner(guild: discord.Guild, winner: discord.Member):
-    """Kazanan üyeyi bir üst kademeye terfi ettirir. Hiçbir kademe rolü yoksa hiçbir şey yapmaz."""
+    """Kazanan üyeyi bir üst kademeye terfi ettirir. Alt kademe rollerini de temizler."""
     if winner is None:
         return
     winner_role_ids = {r.id for r in winner.roles}
@@ -68,11 +68,12 @@ async def promote_winner(guild: discord.Guild, winner: discord.Member):
         current_id = TIER_ORDER[i]
         next_id = TIER_ORDER[i + 1]
         if current_id in winner_role_ids:
-            current_role = guild.get_role(current_id)
             next_role = guild.get_role(next_id)
+            # Tüm mevcut kademe rollerini temizle (eski alt kademeler dahil)
+            tum_tier_roller = [guild.get_role(tid) for tid in TIER_ORDER if tid in winner_role_ids and guild.get_role(tid)]
             try:
-                if current_role:
-                    await winner.remove_roles(current_role, reason="VS kazandı - kademe terfisi")
+                if tum_tier_roller:
+                    await winner.remove_roles(*tum_tier_roller, reason="VS kazandı - eski kademe rolleri temizlendi")
                 if next_role:
                     await winner.add_roles(next_role, reason="VS kazandı - kademe terfisi")
             except discord.Forbidden:

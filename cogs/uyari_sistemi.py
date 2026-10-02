@@ -848,15 +848,15 @@ class UyariSistemi(commands.Cog):
                 continue
             
             if simdi >= jail_bitis:
-                user_data["jail_bitis"] = None
-                degisti = True
-                
                 for guild in self.bot.guilds:
                     member = guild.get_member(int(uid))
                     if member is None:
                         try:
                             member = await guild.fetch_member(int(uid))
                         except discord.NotFound:
+                            # Üye sunucuda değil → cezayı veritabanında BIRAK, affetme!
+                            continue
+                        except Exception:
                             continue
                     if member:
                         jail_rol = guild.get_role(JAIL_ROL)
@@ -865,6 +865,9 @@ class UyariSistemi(commands.Cog):
                                 await member.remove_roles(jail_rol, reason="Jail süresi doldu")
                             except discord.Forbidden:
                                 pass
+                        # Rol başarıyla kaldırıldı (veya zaten yoktu) → cezayı sıfırla
+                        user_data["jail_bitis"] = None
+                        degisti = True
         
         if degisti:
             save_data(UYARI_DATA_FILE, data)

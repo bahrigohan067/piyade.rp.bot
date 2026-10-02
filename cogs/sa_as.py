@@ -64,7 +64,10 @@ class SaAs(commands.Cog):
             return
 
         if selam_mi(message.content):
-            await message.reply(random.choice(YANITLAR), mention_author=False)
+            try:
+                await message.reply(random.choice(YANITLAR), mention_author=False)
+            except (discord.Forbidden, discord.HTTPException):
+                pass
 
 
 async def setup(bot: commands.Bot) -> None:
