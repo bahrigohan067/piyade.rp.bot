@@ -2,13 +2,9 @@
   "gun_shop": {
     "name": "Gunshop Etkileşimli Bölge (Safezone)",
     "type": "safezone_and_shop",
-    "postal_codes": ["227"],
-    "bounds": {
-      "min_x": 1095.33,
-      "max_x": 1129.06,
-      "min_z": 3388.36,
-      "max_z": 3411.18
-    },
+    "postal_codes": [
+      "227"
+    ],
     "points": [
       {
         "x": 1095.33,
@@ -39,13 +35,11 @@
   "police_department": {
     "name": "Polis Departmanı (Safezone)",
     "type": "safezone",
-    "postal_codes": ["317", "310", "316"],
-    "bounds": {
-      "min_x": 2809.82,
-      "max_x": 2946.46,
-      "min_z": 3473.87,
-      "max_z": 3562.42
-    },
+    "postal_codes": [
+      "317",
+      "310",
+      "316"
+    ],
     "points": [
       {
         "x": 2946.46,
@@ -76,13 +70,10 @@
   "fire_department": {
     "name": "Fire Departman (Safezone)",
     "type": "safezone",
-    "postal_codes": ["228", "229"],
-    "bounds": {
-      "min_x": 1207.34,
-      "max_x": 1358.66,
-      "min_z": 3306.45,
-      "max_z": 3459.93
-    },
+    "postal_codes": [
+      "228",
+      "229"
+    ],
     "points": [
       {
         "x": 1358.66,
@@ -113,13 +104,10 @@
   "city_spawn": {
     "name": "City Spawn (Safezone)",
     "type": "safezone",
-    "postal_codes": ["210", "211"],
-    "bounds": {
-      "min_x": 1464.1,
-      "max_x": 1616.43,
-      "min_z": 3843.23,
-      "max_z": 3935.5
-    },
+    "postal_codes": [
+      "210",
+      "211"
+    ],
     "points": [
       {
         "x": 1465.45,

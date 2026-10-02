@@ -15,49 +15,107 @@ BOLGELER_FILE = os.path.join(DATA_DIR, "bolgeler.json")
 KILLER_FILE = os.path.join(DATA_DIR, "gunluk_killer.json")
 DASHBOARD_FILE = os.path.join(DATA_DIR, "radar_dashboard.json")
 
-# Dosya okunamasa bile Safezone kontrolünün asla aksamaması için yedek tanımlar
+# Dosya okunamasa bile Safezone kontrolünün asla aksamaması için yedek tanımlar (4 Köşe Poligon)
 TANIMLI_BOLGELER = {
     "gun_shop": {
         "name": "Gunshop Etkileşimli Bölge (Safezone)",
         "postal_codes": ["227"],
-        "bounds": {"min_x": 1095.33, "max_x": 1129.06, "min_z": 3388.36, "max_z": 3411.18}
+        "points": [
+            {"x": 1095.33, "z": 3411.18},
+            {"x": 1118.24, "z": 3408.05},
+            {"x": 1129.06, "z": 3388.36},
+            {"x": 1110.77, "z": 3395.14}
+        ]
     },
     "police_department": {
         "name": "Polis Departmanı (Safezone)",
         "postal_codes": ["310", "316", "317"],
-        "bounds": {"min_x": 2809.82, "max_x": 2946.46, "min_z": 3473.87, "max_z": 3562.42}
+        "points": [
+            {"x": 2946.46, "z": 3474.49},
+            {"x": 2945.49, "z": 3559.07},
+            {"x": 2809.82, "z": 3562.42},
+            {"x": 2811.28, "z": 3473.87}
+        ]
     },
     "fire_department": {
         "name": "Fire Departman (Safezone)",
         "postal_codes": ["228", "229"],
-        "bounds": {"min_x": 1207.34, "max_x": 1358.66, "min_z": 3306.45, "max_z": 3459.93}
+        "points": [
+            {"x": 1358.66, "z": 3370.96},
+            {"x": 1284.1, "z": 3306.45},
+            {"x": 1207.34, "z": 3440.44},
+            {"x": 1317.57, "z": 3459.93}
+        ]
     },
     "city_spawn": {
         "name": "City Spawn (Safezone)",
         "postal_codes": ["210", "211"],
-        "bounds": {"min_x": 1464.1, "max_x": 1616.43, "min_z": 3843.23, "max_z": 3935.5}
+        "points": [
+            {"x": 1465.45, "z": 3935.5},
+            {"x": 1616.43, "z": 3933.91},
+            {"x": 1615.94, "z": 3845.71},
+            {"x": 1464.1, "z": 3843.23}
+        ]
     }
 }
 
+def point_in_polygon(x: float, z: float, polygon: list) -> bool:
+    """
+    Ray-Casting Algoritması:
+    (x, z) koordinatının verilen 4 noktalı çokgen (safezone sınırları) içinde
+    olup olmadığını milimetrik kesinlikle hesaplar.
+    """
+    if not polygon or len(polygon) < 3:
+        return False
+
+    pts = []
+    for p in polygon:
+        if isinstance(p, dict):
+            pts.append((float(p["x"]), float(p["z"])))
+        elif isinstance(p, (list, tuple)):
+            pts.append((float(p[0]), float(p[1])))
+
+    n = len(pts)
+    inside = False
+    p1x, p1z = pts[0]
+    for i in range(n + 1):
+        p2x, p2z = pts[i % n]
+        if min(p1z, p2z) < z <= max(p1z, p2z):
+            if x <= max(p1x, p2x):
+                if p1z != p2z:
+                    xinters = (z - p1z) * (p2x - p1x) / (p2z - p1z) + p1x
+                if p1x == p2x or x <= xinters:
+                    inside = not inside
+        p1x, p1z = p2x, p2z
+    return inside
+
 def bolge_kontrol(x, z, postal, bolgeler):
-    # 1. Koordinat ile kontrol (15 birim esneklik payı ile)
-    if isinstance(x, (int, float)) and isinstance(z, (int, float)):
-        for b_id, b_info in bolgeler.items():
-            bounds = b_info.get("bounds", {})
+    """
+    Oyuncunun (x, z) koordinatlarının tam olarak hangi Safezone poligonu içinde olduğunu belirler.
+    NOT: Posta kodları yüzlerce metrelik geniş sokakları kapsadığı için Safezone tespitinde
+    kullanılmaz; yalnızca poligon (X, Z) koordinat kontrolü esastır.
+    """
+    if not isinstance(x, (int, float)) or not isinstance(z, (int, float)):
+        return None
+
+    for b_id, b_info in bolgeler.items():
+        # 1. Kesin Poligon Kontrolü (4 Köşe Noktası)
+        points = b_info.get("points")
+        if points and len(points) >= 3:
+            if point_in_polygon(float(x), float(z), points):
+                return b_info.get("name", b_id)
+            continue
+
+        # 2. Yedek: Sadece points yoksa katı bounds kontrolü (tampon payı olmadan)
+        bounds = b_info.get("bounds")
+        if bounds:
             min_x = bounds.get("min_x")
             max_x = bounds.get("max_x")
             min_z = bounds.get("min_z")
             max_z = bounds.get("max_z")
             if min_x is not None and max_x is not None and min_z is not None and max_z is not None:
-                if (min_x - 15) <= x <= (max_x + 15) and (min_z - 15) <= z <= (max_z + 15):
+                if min_x <= x <= max_x and min_z <= z <= max_z:
                     return b_info.get("name", b_id)
-
-    # 2. Posta Kodu ile kontrol (Koordinat sınırın azıcık dışındaysa bile posta kodu eşleşirse yakalar)
-    if postal and postal != "-":
-        for b_id, b_info in bolgeler.items():
-            codes = [str(p) for p in b_info.get("postal_codes", [])]
-            if str(postal) in codes:
-                return b_info.get("name", b_id)
 
     return None
 
