@@ -1,1 +1,1 @@
-# piyade.rp.bot
+# ER-LC-Piyadeleri

@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+
+# Secrets & Config
+.env
+.env.local
+
+# OS Files
+.DS_Store
+Thumbs.db
+ehthumbs.db
+
+# Large binaries (downloaded via container/system package)
+ffmpeg.exe
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Temporary & Archived scripts
+scratch_*.py
+scripts/archive/
+
+# Dynamic data files (keep seed data)
+data/*.json
+!data/colors.json
+!data/bolgeler.json
