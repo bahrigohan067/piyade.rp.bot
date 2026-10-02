@@ -41,6 +41,7 @@ class MyBot(commands.Bot):
         from cogs.cete_sistemi import GangPanelView, AdminGangPanelView
         from cogs.rp_oylama import RPOylamaView
         from cogs.yardim_bekleme import DevralView, DestekAktifView
+        from cogs.mod_cagri import ModCagriView
 
         self.add_view(KayitButonView())
         self.add_view(OnayView(user_id=None))
@@ -57,6 +58,7 @@ class MyBot(commands.Bot):
         self.add_view(RPOylamaView())
         self.add_view(DevralView())
         self.add_view(DestekAktifView())
+        self.add_view(ModCagriView())
 
         # ── Akıllı Otomatik Slash Komut Senkronizasyonu ──
         # Discord'a kayıtlı komut sayısını çekip yerel komut sayısıyla karşılaştırır.
