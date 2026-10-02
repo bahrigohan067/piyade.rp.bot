@@ -1,14 +1,17 @@
 import discord
 from discord.ext import commands, tasks
+from discord import app_commands
 import aiohttp
 import os
 import asyncio
 from datetime import datetime, timezone, timedelta
+from typing import Optional
 from utils.storage import load_json, save_json_atomic, async_save_json
 
 # ==================== AYARLAR ====================
 MOD_LOG_KANAL_ID = 1555628244806410280
 MOD_ROL_ID = 1555628384166346752
+ASIL_KURUCU_ID = 1133815339898122320
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(BASE_DIR, "data")
@@ -32,8 +35,10 @@ class ModCagriView(discord.ui.View):
     )
     async def kapat_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         # Yetkili rolü veya yönetici kontrolü
-        has_perm = interaction.user.guild_permissions.administrator or any(
-            r.id == MOD_ROL_ID for r in interaction.user.roles
+        has_perm = (
+            interaction.user.id == ASIL_KURUCU_ID
+            or interaction.user.guild_permissions.administrator
+            or any(r.id == MOD_ROL_ID for r in interaction.user.roles)
         )
         if not has_perm:
             return await interaction.response.send_message(
@@ -122,12 +127,170 @@ class ModCagri(commands.Cog):
             self.session = aiohttp.ClientSession()
         return self.session
 
-    @tasks.loop(seconds=10)
+    async def discorda_cagri_gonder(self, kanal: discord.TextChannel, player_raw: str, gerekce: str, ts: int):
+        """
+        Discord kanalına @Moderatör rol etiketiyle kırmızı renkli çağrı mesajı atar.
+        """
+        player_name = player_raw.split(":")[0]
+        player_id = player_raw.split(":")[1] if ":" in player_raw else "0"
+        player_key = player_name.lower()
+
+        if player_key in self.aktif_cagrilar:
+            return None
+
+        tz_tr = timezone(timedelta(hours=3))
+        dt_ts = datetime.fromtimestamp(ts, tz=timezone.utc) if ts else datetime.now(tz_tr)
+
+        embed = discord.Embed(
+            title="🚨 PİYADE ROLEPLAY • MODERATÖR ÇAĞRISI",
+            description=(
+                f"> **ER:LC oyun sunucusunda bir oyuncu moderatör talep etti!**\n"
+                f"> *Oyunda bulunan moderatörlerimizin derhal `:to {player_name}` atarak müdahale etmesi gerekmektedir.*"
+            ),
+            color=discord.Color.red(),
+            timestamp=dt_ts
+        )
+        embed.add_field(
+            name="👤 Çağrı Yapan Oyuncu (Roblox)",
+            value=f"**{player_name}** `(ID: {player_id})`",
+            inline=True
+        )
+        embed.add_field(
+            name="💬 Gerekçe / Mesaj",
+            value=f"`{gerekce}`",
+            inline=True
+        )
+        embed.add_field(
+            name="⏳ Çağrı Durumu",
+            value="`🔴 Beklemede (Yetkili müdahalesi bekleniyor)`",
+            inline=False
+        )
+        embed.add_field(
+            name="💡 Nasıl Müdahale Edilir?",
+            value=f"Oyun içerisinde **`:to {player_name}`** komutunu kullanarak oyuncuya ışınlanabilirsiniz.",
+            inline=False
+        )
+        embed.set_footer(text="Piyade Roleplay • Oyun İçi Yetkili Takip Sistemi")
+
+        rol_etiketi = f"<@&{MOD_ROL_ID}>"
+        view = ModCagriView()
+
+        try:
+            msg = await kanal.send(content=rol_etiketi, embed=embed, view=view)
+            self.aktif_cagrilar[player_key] = {
+                "player_raw": player_raw,
+                "player_name": player_name,
+                "player_id": player_id,
+                "message_id": msg.id,
+                "channel_id": kanal.id,
+                "gerekce": gerekce,
+                "timestamp": ts or int(datetime.now(timezone.utc).timestamp()),
+                "status": "beklemede"
+            }
+            print(f"[MOD ÇAĞRI] {player_name} için Discord'a bildirim iletildi (Mesaj ID: {msg.id})", flush=True)
+            return msg
+        except discord.Forbidden:
+            print(f"[MOD ÇAĞRI HATA] Botun {kanal.name} kanalına mesaj gönderme yetkisi yok! Lütfen kanal izinlerini kontrol edin.", flush=True)
+            return None
+        except Exception as e:
+            print(f"[MOD ÇAĞRI HATA] Mesaj gönderilemedi: {e}", flush=True)
+            return None
+
+    async def cagriyi_coz(self, kanal: discord.TextChannel, caller_key: str, mod_name: str, mod_id: str, cmd_ts: int):
+        """
+        Moderatör :to [oyuncu] attığında veya çağrıyı yanıtladığında Discord mesajını griye çevirir ve etiketi siler.
+        """
+        cagri_bilgi = self.aktif_cagrilar.pop(caller_key, None)
+        if not cagri_bilgi:
+            return
+
+        msg_id = cagri_bilgi.get("message_id")
+        if not msg_id:
+            return
+
+        try:
+            cagri_msg = await kanal.fetch_message(msg_id)
+        except Exception:
+            cagri_msg = None
+
+        if not cagri_msg:
+            return
+
+        tz_tr = timezone(timedelta(hours=3))
+        ilk_ts = cagri_bilgi.get("timestamp", cmd_ts)
+        fark_saniye = max(0, cmd_ts - ilk_ts) if (cmd_ts and ilk_ts) else 0
+        if fark_saniye < 60:
+            sure_str = f"**{fark_saniye} saniye**"
+        else:
+            dakika = fark_saniye // 60
+            saniye = fark_saniye % 60
+            sure_str = f"**{dakika} dakika {saniye} saniye**"
+
+        dt_cmd = datetime.fromtimestamp(cmd_ts, tz=timezone.utc) if cmd_ts else datetime.now(tz_tr)
+
+        gri_embed = discord.Embed(
+            title="🔘 PİYADE RP • MODERATÖR ÇAĞRISI (YANITLANDI)",
+            description=(
+                f"> **Bu çağrı oyun içinde yetkili tarafından başarıyla devralındı.**\n"
+                f"> *İlgili moderatör oyuncunun yanına ışınlandı (`:to {cagri_bilgi['player_name']}`).*"
+            ),
+            color=discord.Color.dark_grey(),
+            timestamp=dt_cmd
+        )
+        gri_embed.add_field(
+            name="👤 Çağrı Yapan Oyuncu",
+            value=f"**{cagri_bilgi['player_name']}** `(ID: {cagri_bilgi.get('player_id', '0')})`",
+            inline=True
+        )
+        gri_embed.add_field(
+            name="🛡️ Yanıtlayan Moderatör",
+            value=f"**{mod_name}** `(ID: {mod_id})`",
+            inline=True
+        )
+        gri_embed.add_field(
+            name="💬 Gerekçe",
+            value=f"`{cagri_bilgi.get('gerekce', '-')}`",
+            inline=True
+        )
+        gri_embed.add_field(
+            name="⏱️ Yanıt Süresi",
+            value=f"Çağrı {sure_str} içinde yanıtlandı.",
+            inline=True
+        )
+        gri_embed.add_field(
+            name="📊 Durum",
+            value="`🔘 Yanıtlandı & Kapatıldı (:to Atıldı)`",
+            inline=True
+        )
+        gri_embed.set_footer(text="✅ Piyade Roleplay • Moderatör Müdahalesi Tamamlandı")
+
+        try:
+            view = ModCagriView()
+            for btn in view.children:
+                btn.disabled = True
+            # content=None yapılarak @rol etiketi tamamen silinir!
+            await cagri_msg.edit(content=None, embed=gri_embed, view=view)
+            print(f"[MOD ÇAĞRI ÇÖZÜLDÜ] {mod_name}, {cagri_bilgi['player_name']} çağrısını devraldı. Log griye döndü ve etiket silindi.", flush=True)
+        except Exception as e:
+            print(f"[MOD ÇAĞRI HATA] Log düzenlenemedi: {e}", flush=True)
+
+        cagri_bilgi["status"] = "cozuldu_to"
+        cagri_bilgi["moderator"] = mod_name
+        cagri_bilgi["moderator_id"] = mod_id
+        cagri_bilgi["cozulme_ts"] = cmd_ts
+
+        cagri_data = load_json(CAGRILAR_FILE, {"aktif_cagrilar": {}, "gecmis_cagrilar": []})
+        cagri_data.setdefault("gecmis_cagrilar", []).append(cagri_bilgi)
+        cagri_data["gecmis_cagrilar"] = cagri_data["gecmis_cagrilar"][-100:]
+        cagri_data["aktif_cagrilar"] = self.aktif_cagrilar
+        await async_save_json(CAGRILAR_FILE, cagri_data)
+
+    @tasks.loop(seconds=8)
     async def mod_takip_loop(self):
         """
-        ER:LC API'sini her 10 saniyede bir sorgular:
-        1. !mod komutu atan kullanıcıları tespit edip Discord'a rol etiketiyle kırmızı log atar.
-        2. Moderatörlerin attığı :to [kullanıcı] komutlarını tespit edip logu griye çevirir ve etiketi siler.
+        ER:LC API'sini her 8 saniyede bir sorgular:
+        1. !mod / :mod çağrılarını hem ModCalls hem de CommandLogs üzerinden tespit eder.
+        2. :to [oyuncu] atan moderatörleri tespit edip logu griye çevirir ve rol etiketini siler.
         """
         if not self.bot.is_ready():
             return
@@ -143,230 +306,101 @@ class ModCagri(commands.Cog):
             except Exception:
                 return
 
-        # ER:LC API'sinden hem CommandLogs hem de ModCalls verilerini çek
+        # ER:LC API Verilerini Çek
         try:
             session = await self.get_session()
             headers = {"Server-Key": api_key}
             url = "https://api.erlc.gg/v2/server?CommandLogs=true&ModCalls=true"
-            async with session.get(url, headers=headers, timeout=7) as resp:
+            async with session.get(url, headers=headers, timeout=6) as resp:
                 if resp.status != 200:
+                    err_txt = await resp.text()
+                    print(f"[MOD ÇAĞRI API HATA] HTTP {resp.status}: {err_txt}", flush=True)
                     return
                 data = await resp.json()
                 command_logs = data.get("CommandLogs", [])
                 mod_calls = data.get("ModCalls", [])
         except Exception as e:
-            # Sessiz geçiş (Geçici ağ hataları logu kirletmesin)
+            # Geçici bağlantı kopmalarını logla
             return
 
-        tz_tr = timezone(timedelta(hours=3))
         degisiklik_oldu = False
 
         # =========================================================================
-        # 1. ADIM: !mod ÇAĞRILARINI TESPİT ET VE DİSCORD'A BİLDİR
+        # 1. KAYNAK: ModCalls (ER:LC Resmi Moderatör Çağrı Listesi)
         # =========================================================================
-        for item in command_logs:
-            cmd = item.get("Command", "").strip()
-            ts = item.get("Timestamp", 0)
-            player_raw = str(item.get("Player", "Bilinmiyor:0"))
-            komut_id = f"{player_raw}_{cmd}_{ts}"
+        if mod_calls:
+            for mc in mod_calls:
+                caller_raw = str(mc.get("Caller", "Bilinmiyor:0"))
+                moderator_raw = mc.get("Moderator")
+                ts = mc.get("Timestamp", 0)
+                mc_id = f"mc_{caller_raw}_{ts}"
 
-            if komut_id in self.islenen_komutlar:
-                continue
+                caller_name = caller_raw.split(":")[0]
+                caller_key = caller_name.lower()
 
-            self.islenen_komutlar.add(komut_id)
-            degisiklik_oldu = True
+                # A) Eğer henüz bir moderatör yanıtlamadıysa (Moderator == null):
+                if not moderator_raw:
+                    if mc_id not in self.islenen_komutlar:
+                        self.islenen_komutlar.add(mc_id)
+                        degisiklik_oldu = True
+                        if caller_key not in self.aktif_cagrilar:
+                            await self.discorda_cagri_gonder(
+                                kanal, caller_raw, "Oyun İçi ModCall (:mod)", ts
+                            )
 
-            cmd_lower = cmd.lower()
-            # !mod, :mod veya benzeri moderatör çağrıları
-            if cmd_lower.startswith(("!mod", ":mod", "!yardim", "!destek")):
-                player_name = player_raw.split(":")[0]
-                player_id = player_raw.split(":")[1] if ":" in player_raw else "0"
-                player_key = player_name.lower()
-
-                # Oyuncu zaten beklemede olan bir çağrıya sahipse mükerrer açma
-                if player_key in self.aktif_cagrilar:
-                    continue
-
-                # Çağrı gerekçesi (Örn: !mod RDM Var -> RDM Var)
-                gerekce_parcalar = cmd.split(maxsplit=1)
-                gerekce = gerekce_parcalar[1] if len(gerekce_parcalar) > 1 else "*Gerekçe belirtilmedi (Sadece !mod yazıldı)*"
-
-                dt_ts = datetime.fromtimestamp(ts, tz=timezone.utc) if ts else datetime.now(tz_tr)
-
-                embed = discord.Embed(
-                    title="🚨 PİYADE ROLEPLAY • MODERATÖR ÇAĞRISI",
-                    description=(
-                        f"> **ER:LC oyun sunucusunda bir oyuncu moderatör talep etti!**\n"
-                        f"> *Oyunda bulunan moderatörlerimizin derhal `:to {player_name}` atarak müdahale etmesi gerekmektedir.*"
-                    ),
-                    color=discord.Color.red(),
-                    timestamp=dt_ts
-                )
-                embed.add_field(
-                    name="👤 Çağrı Yapan Oyuncu (Roblox)",
-                    value=f"**{player_name}** `(ID: {player_id})`",
-                    inline=True
-                )
-                embed.add_field(
-                    name="💬 Gerekçe / Mesaj",
-                    value=f"`{gerekce}`",
-                    inline=True
-                )
-                embed.add_field(
-                    name="⏳ Çağrı Durumu",
-                    value="`🔴 Beklemede (Yetkili müdahalesi bekleniyor)`",
-                    inline=False
-                )
-                embed.add_field(
-                    name="💡 Nasıl Müdahale Edilir?",
-                    value=f"Oyun içerisinde **`:to {player_name}`** komutunu kullanarak oyuncuya ışınlanabilirsiniz.",
-                    inline=False
-                )
-                embed.set_footer(text="Piyade Roleplay • Oyun İçi Yetkili Takip Sistemi")
-
-                # Mesajı gönder ve rolü etiketle
-                try:
-                    rol_etiketi = f"<@&{MOD_ROL_ID}>"
-                    view = ModCagriView()
-                    gonderilen_msg = await kanal.send(content=rol_etiketi, embed=embed, view=view)
-
-                    self.aktif_cagrilar[player_key] = {
-                        "player_raw": player_raw,
-                        "player_name": player_name,
-                        "player_id": player_id,
-                        "message_id": gonderilen_msg.id,
-                        "channel_id": kanal.id,
-                        "gerekce": gerekce,
-                        "timestamp": ts or int(datetime.now(timezone.utc).timestamp()),
-                        "status": "beklemede"
-                    }
-                    print(f"[MOD ÇAĞRI] {player_name} oyuncusu !mod gönderdi. Discord'a iletildi.", flush=True)
-                except Exception as e:
-                    print(f"[MOD ÇAĞRI HATA] Bildirim gönderilemedi: {e}", flush=True)
+                # B) Eğer bir moderatör in-game yanıtladıysa (Moderator != null):
+                else:
+                    if caller_key in self.aktif_cagrilar:
+                        mod_str = str(moderator_raw)
+                        mod_name = mod_str.split(":")[0]
+                        mod_id = mod_str.split(":")[1] if ":" in mod_str else "0"
+                        await self.cagriyi_coz(kanal, caller_key, mod_name, mod_id, ts)
+                        degisiklik_oldu = True
 
         # =========================================================================
-        # 2. ADIM: MODERATÖRÜN :to [kullanıcı] KOMUTLARINI TESPİT ET VE LOGU GRİYE ÇEVİR
+        # 2. KAYNAK: CommandLogs (Tüm Komutlar: :mod, !mod, ;mod ve :to)
         # =========================================================================
-        if self.aktif_cagrilar:
+        if command_logs:
             for item in command_logs:
                 cmd = item.get("Command", "").strip()
-                cmd_lower = cmd.lower()
+                ts = item.get("Timestamp", 0)
                 player_raw = str(item.get("Player", "Bilinmiyor:0"))
-                mod_name = player_raw.split(":")[0]
-                mod_id = player_raw.split(":")[1] if ":" in player_raw else "0"
-                cmd_ts = item.get("Timestamp", 0)
+                komut_id = f"{player_raw}_{cmd}_{ts}"
 
-                # Moderatör :to <hedef>, :tp <hedef> veya :bring <hedef> attı mı?
-                hedef_isim = None
-                for prefix in (":to ", ":tp ", ":bring "):
-                    if cmd_lower.startswith(prefix):
-                        hedef_isim = cmd_lower[len(prefix):].strip()
-                        break
-
-                if not hedef_isim:
+                if komut_id in self.islenen_komutlar:
                     continue
 
-                # Aktif çağrı yapanlardan bu hedef ile eşleşen var mı?
-                bulunan_cagri_key = None
-                for caller_key in list(self.aktif_cagrilar.keys()):
-                    # Tam eşleşme veya Roblox kullanıcı adı başlangıç eşleşmesi
-                    if hedef_isim == caller_key or hedef_isim in caller_key or caller_key in hedef_isim:
-                        bulunan_cagri_key = caller_key
-                        break
-
-                if not bulunan_cagri_key:
-                    continue
-
-                cagri_bilgi = self.aktif_cagrilar.pop(bulunan_cagri_key)
+                self.islenen_komutlar.add(komut_id)
                 degisiklik_oldu = True
 
-                msg_id = cagri_bilgi.get("message_id")
-                if not msg_id:
-                    continue
+                cmd_lower = cmd.lower()
 
-                try:
-                    cagri_msg = await kanal.fetch_message(msg_id)
-                except Exception:
-                    cagri_msg = None
+                # A) Çağrı Komutları (:mod, !mod, ;mod, :modcall, !modcall, :yardim, !yardim)
+                if cmd_lower.startswith((":mod", "!mod", ";mod", ":modcall", "!modcall", ";modcall", ":yardim", "!yardim", ":destek", "!destek")):
+                    caller_name = player_raw.split(":")[0]
+                    caller_key = caller_name.lower()
 
-                if not cagri_msg:
-                    continue
+                    if caller_key not in self.aktif_cagrilar:
+                        gerekce_parcalar = cmd.split(maxsplit=1)
+                        gerekce = gerekce_parcalar[1] if len(gerekce_parcalar) > 1 else "*Gerekçe belirtilmedi*"
+                        await self.discorda_cagri_gonder(kanal, player_raw, gerekce, ts)
 
-                # Geçen süreyi hesapla
-                ilk_ts = cagri_bilgi.get("timestamp", cmd_ts)
-                fark_saniye = max(0, cmd_ts - ilk_ts) if (cmd_ts and ilk_ts) else 0
-                if fark_saniye < 60:
-                    sure_str = f"**{fark_saniye} saniye**"
-                else:
-                    dakika = fark_saniye // 60
-                    saniye = fark_saniye % 60
-                    sure_str = f"**{dakika} dakika {saniye} saniye**"
+                # B) Moderatör Müdahale Komutları (:to [oyuncu], :tp [oyuncu], :bring [oyuncu])
+                for prefix in (":to ", ":tp ", ":bring ", ";to ", "!to "):
+                    if cmd_lower.startswith(prefix):
+                        hedef_isim = cmd_lower[len(prefix):].strip()
+                        mod_name = player_raw.split(":")[0]
+                        mod_id = player_raw.split(":")[1] if ":" in player_raw else "0"
 
-                # 🔘 GRİ EMBED HAZIRLA (Rol etiketi kaldırılacak)
-                dt_cmd = datetime.fromtimestamp(cmd_ts, tz=timezone.utc) if cmd_ts else datetime.now(tz_tr)
+                        # Aktif çağrılarda bu hedefle eşleşen var mı?
+                        for caller_key in list(self.aktif_cagrilar.keys()):
+                            if hedef_isim == caller_key or hedef_isim in caller_key or caller_key in hedef_isim:
+                                await self.cagriyi_coz(kanal, caller_key, mod_name, mod_id, ts)
+                                break
+                        break
 
-                gri_embed = discord.Embed(
-                    title="🔘 PİYADE RP • MODERATÖR ÇAĞRISI (YANITLANDI)",
-                    description=(
-                        f"> **Bu çağrı oyun içinde yetkili tarafından başarıyla devralındı.**\n"
-                        f"> *İlgili moderatör oyuncunun yanına ışınlandı (`:to {cagri_bilgi['player_name']}`).*"
-                    ),
-                    color=discord.Color.dark_grey(),
-                    timestamp=dt_cmd
-                )
-                gri_embed.add_field(
-                    name="👤 Çağrı Yapan Oyuncu",
-                    value=f"**{cagri_bilgi['player_name']}** `(ID: {cagri_bilgi.get('player_id', '0')})`",
-                    inline=True
-                )
-                gri_embed.add_field(
-                    name="🛡️ Yanıtlayan Moderatör",
-                    value=f"**{mod_name}** `(ID: {mod_id})`",
-                    inline=True
-                )
-                gri_embed.add_field(
-                    name="💬 Gerekçe",
-                    value=f"`{cagri_bilgi.get('gerekce', '-')}`",
-                    inline=True
-                )
-                gri_embed.add_field(
-                    name="⏱️ Yanıt Süresi",
-                    value=f"Çağrı {sure_str} içinde yanıtlandı.",
-                    inline=True
-                )
-                gri_embed.add_field(
-                    name="📊 Durum",
-                    value="`🔘 Yanıtlandı & Kapatıldı (:to Atıldı)`",
-                    inline=True
-                )
-                gri_embed.set_footer(text="✅ Piyade Roleplay • Moderatör Müdahalesi Tamamlandı")
-
-                try:
-                    # content=None yapılarak @rol etiketi tamamen silinir!
-                    # View butonu pasif hale getirilir
-                    view = ModCagriView()
-                    for item_btn in view.children:
-                        item_btn.disabled = True
-                    await cagri_msg.edit(content=None, embed=gri_embed, view=view)
-                    print(f"[MOD ÇAĞRI ÇÖZÜLDÜ] {mod_name}, {cagri_bilgi['player_name']} çağrısına :to attı. Log griye döndü ve etiket silindi.", flush=True)
-                except Exception as e:
-                    print(f"[MOD ÇAĞRI HATA] Log güncellenemedi: {e}", flush=True)
-
-                # Geçmişe kaydet
-                cagri_bilgi["status"] = "cozuldu_to"
-                cagri_bilgi["moderator"] = mod_name
-                cagri_bilgi["moderator_id"] = mod_id
-                cagri_bilgi["cozulme_ts"] = cmd_ts
-
-                cagri_data = load_json(CAGRILAR_FILE, {"aktif_cagrilar": {}, "gecmis_cagrilar": []})
-                cagri_data.setdefault("gecmis_cagrilar", []).append(cagri_bilgi)
-                cagri_data["gecmis_cagrilar"] = cagri_data["gecmis_cagrilar"][-100:]
-                cagri_data["aktif_cagrilar"] = self.aktif_cagrilar
-                await async_save_json(CAGRILAR_FILE, cagri_data)
-
-        # Değişiklik varsa verileri diske kaydet
+        # Verileri kaydet
         if degisiklik_oldu:
-            # Bellekteki işlenmiş komutları 300 ile sınırla (Hafıza şişmesini önler)
             if len(self.islenen_komutlar) > 500:
                 self.islenen_komutlar = set(list(self.islenen_komutlar)[-300:])
             await async_save_json(ISLENEN_KOMUTLAR_FILE, {"islenen_id": list(self.islenen_komutlar)})
@@ -378,6 +412,66 @@ class ModCagri(commands.Cog):
     @mod_takip_loop.before_loop
     async def before_mod_takip(self):
         await self.bot.wait_until_ready()
+
+    # =========================================================================
+    # TEST VE YÖNETİM SLASH KOMUTLARI (Kurucuya Özel)
+    # =========================================================================
+    @app_commands.command(name="test-cagri", description="Moderatör çağrı sistemini test etmek için sanal çağrı gönderir.")
+    @app_commands.describe(
+        roblox_adi="Test çağrısı yapacak oyuncunun Roblox adı",
+        sebep="Çağrı gerekçesi"
+    )
+    async def test_cagri(self, interaction: discord.Interaction, roblox_adi: str, sebep: Optional[str] = "Test Çağrısı (RDM İhbarı)"):
+        if interaction.user.id != ASIL_KURUCU_ID and not interaction.user.guild_permissions.administrator:
+            return await interaction.response.send_message("❌ Bu komutu sadece **Kurucu** kullanabilir!", ephemeral=True)
+
+        kanal = self.bot.get_channel(MOD_LOG_KANAL_ID)
+        if not kanal:
+            return await interaction.response.send_message(f"❌ Hedef kanal (<#{MOD_LOG_KANAL_ID}>) bulunamadı!", ephemeral=True)
+
+        await interaction.response.defer(ephemeral=True)
+        now_ts = int(datetime.now(timezone.utc).timestamp())
+        msg = await self.discorda_cagri_gonder(kanal, f"{roblox_adi}:999999", sebep, now_ts)
+
+        if msg:
+            await interaction.followup.send(
+                f"✅ Test çağrısı başarıyla {kanal.mention} kanalına gönderildi!\nŞimdi test için `/test-to roblox_adi:{roblox_adi}` komutunu kullanabilir veya butona basabilirsiniz.",
+                ephemeral=True
+            )
+        else:
+            await interaction.followup.send(
+                f"❌ Test çağrısı gönderilemedi. Lütfen botun {kanal.mention} kanalındaki izinlerini kontrol edin!",
+                ephemeral=True
+            )
+
+    @app_commands.command(name="test-to", description="Moderatörün oyunda :to attığı durumu simüle eder.")
+    @app_commands.describe(
+        roblox_adi="Çağrıyı yapan oyuncunun Roblox adı",
+        mod_adi="Oyuncuya ışınlanan moderatörün adı"
+    )
+    async def test_to(self, interaction: discord.Interaction, roblox_adi: str, mod_adi: Optional[str] = "YoneticiMod"):
+        if interaction.user.id != ASIL_KURUCU_ID and not interaction.user.guild_permissions.administrator:
+            return await interaction.response.send_message("❌ Bu komutu sadece **Kurucu** kullanabilir!", ephemeral=True)
+
+        kanal = self.bot.get_channel(MOD_LOG_KANAL_ID)
+        if not kanal:
+            return await interaction.response.send_message(f"❌ Hedef kanal (<#{MOD_LOG_KANAL_ID}>) bulunamadı!", ephemeral=True)
+
+        caller_key = roblox_adi.lower()
+        if caller_key not in self.aktif_cagrilar:
+            return await interaction.response.send_message(
+                f"❌ `{roblox_adi}` adına ait aktif bir çağrı bulunamadı. Önce `/test-cagri` atın.",
+                ephemeral=True
+            )
+
+        await interaction.response.defer(ephemeral=True)
+        now_ts = int(datetime.now(timezone.utc).timestamp())
+        await self.cagriyi_coz(kanal, caller_key, mod_adi, "123456", now_ts)
+
+        await interaction.followup.send(
+            f"✅ `{mod_adi}` yetkilisinin `{roblox_adi}` oyuncusuna `:to` attığı simüle edildi. {kanal.mention} kanalındaki log griye dönmüş ve etiket silinmiş olmalı!",
+            ephemeral=True
+        )
 
 
 async def setup(bot: commands.Bot):
