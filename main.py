@@ -58,20 +58,23 @@ class MyBot(commands.Bot):
         self.add_view(DevralView())
         self.add_view(DestekAktifView())
 
-        # ── Slash komut senkronizasyonu ──
-        # FORCE_SYNC=true ortam değişkeni varsa senkronize et.
-        # Yoksa mevcut kayıtlı komutları kullan (Rate limit koruması: 200 istek/gün sınırı).
-        force_sync = os.environ.get("FORCE_SYNC", "false").lower() == "true"
-        if force_sync:
-            try:
-                guild = discord.Object(id=GUILD_ID)
-                self.tree.copy_global_to(guild=guild)
+        # ── Akıllı Otomatik Slash Komut Senkronizasyonu ──
+        # Discord'a kayıtlı komut sayısını çekip yerel komut sayısıyla karşılaştırır.
+        # Sadece fark varsa sync yapar → Rate limit koruması (200 istek/gün).
+        try:
+            guild = discord.Object(id=GUILD_ID)
+            self.tree.copy_global_to(guild=guild)
+
+            yerel_komutlar = self.tree.get_commands(guild=guild)
+            kayitli_komutlar = await self.tree.fetch_commands(guild=guild)
+
+            if len(yerel_komutlar) != len(kayitli_komutlar):
                 synced = await self.tree.sync(guild=guild)
-                print(f"{len(synced)} slash komut senkronize edildi.")
-            except Exception as e:
-                print(f"Komut senkronizasyon hatası: {e}")
-        else:
-            print("Slash komutlar senkronize edilmedi (FORCE_SYNC=true değil). Mevcut kayıtlı komutlar kullanılıyor.")
+                print(f"[SYNC] Komut sayısı değişti ({len(kayitli_komutlar)} → {len(synced)}). Senkronize edildi.")
+            else:
+                print(f"[SYNC] Komutlar güncel ({len(kayitli_komutlar)} komut). Sync atlandı.")
+        except Exception as e:
+            print(f"[SYNC] Senkronizasyon hatası: {e}")
 
 bot = MyBot()
 
