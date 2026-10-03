@@ -462,8 +462,8 @@ class ModCagri(commands.Cog):
                         gerekce = gerekce_parcalar[1] if len(gerekce_parcalar) > 1 else "*Gerekçe belirtilmedi*"
                         await self.discorda_cagri_gonder(kanal, player_raw, gerekce, ts)
 
-                # B) Moderatör Müdahale Komutları (:to [oyuncu], :tp [oyuncu], :bring [oyuncu])
-                for prefix in (":to ", ":tp ", ":bring ", ";to ", "!to "):
+                # B) Moderatör Müdahale Komutları (:to [oyuncu], :tp [oyuncu], :bring [oyuncu], :goto [oyuncu])
+                for prefix in (":to ", ":tp ", ":bring ", ";to ", "!to ", ":goto ", ";goto ", "!goto ", ":teleport "):
                     if cmd_lower.startswith(prefix):
                         hedef_isim = cmd_lower[len(prefix):].strip()
                         mod_name = player_raw.split(":")[0]
