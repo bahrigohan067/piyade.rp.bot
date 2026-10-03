@@ -85,20 +85,54 @@ class ModCagriView(discord.ui.View):
         button.disabled = True
         await msg.edit(content=None, embed=yeni_embed, view=self)
 
-        # Veritabanından aktif çağrıyı kaldır
+        # Cog referansını al ve RAM'deki aktif_cagrilar'dan sil
+        cog = interaction.client.get_cog("ModCagri")
+
+        # Oyuncu adını embed alanlarından çek
+        player_key_fallback = None
+        for field in embed.fields:
+            if "Oyuncu" in field.name:
+                clean_val = field.value.replace("*", "").strip()
+                p_name = clean_val.split("(")[0].strip().split("`")[0].strip()
+                if p_name:
+                    player_key_fallback = p_name.lower()
+                break
+
+        silinecek = None
+        if cog and hasattr(cog, "aktif_cagrilar"):
+            for k, v in list(cog.aktif_cagrilar.items()):
+                if v.get("message_id") == msg.id:
+                    silinecek = k
+                    break
+            if not silinecek and player_key_fallback and player_key_fallback in cog.aktif_cagrilar:
+                silinecek = player_key_fallback
+            if silinecek:
+                cog.aktif_cagrilar.pop(silinecek, None)
+            elif player_key_fallback:
+                cog.aktif_cagrilar.pop(player_key_fallback, None)
+
+        # Veritabanından aktif çağrıyı kaldır ve geçmişe kaydet
         cagri_data = load_json(CAGRILAR_FILE, {"aktif_cagrilar": {}, "gecmis_cagrilar": []})
         aktif = cagri_data.get("aktif_cagrilar", {})
-        silinecek = None
-        for k, v in aktif.items():
-            if v.get("message_id") == msg.id:
-                silinecek = k
-                break
-        if silinecek:
+        if not silinecek:
+            for k, v in list(aktif.items()):
+                if v.get("message_id") == msg.id:
+                    silinecek = k
+                    break
+        if not silinecek and player_key_fallback and player_key_fallback in aktif:
+            silinecek = player_key_fallback
+
+        if silinecek and silinecek in aktif:
             kayit = aktif.pop(silinecek)
             kayit["status"] = "cozuldu_discord"
             kayit["closed_by"] = str(interaction.user)
+            kayit["closed_at"] = int(discord.utils.utcnow().timestamp())
             cagri_data.setdefault("gecmis_cagrilar", []).append(kayit)
             cagri_data["gecmis_cagrilar"] = cagri_data["gecmis_cagrilar"][-100:]
+            cagri_data["aktif_cagrilar"] = aktif
+            await async_save_json(CAGRILAR_FILE, cagri_data)
+        elif cog and hasattr(cog, "aktif_cagrilar"):
+            cagri_data["aktif_cagrilar"] = cog.aktif_cagrilar
             await async_save_json(CAGRILAR_FILE, cagri_data)
 
 
@@ -115,7 +149,25 @@ class ModCagri(commands.Cog):
         cagri_data = load_json(CAGRILAR_FILE, {"aktif_cagrilar": {}, "gecmis_cagrilar": []})
         self.aktif_cagrilar = cagri_data.get("aktif_cagrilar", {})
 
+        # Bot başlarken 10 dakikadan eski veya kapanmış çağrıları temizle
+        self.stale_cagrilari_temizle()
+
         self.mod_takip_loop.start()
+
+    def stale_cagrilari_temizle(self):
+        """
+        10 dakikadan (600 sn) eski çağrıları veya tamamlanmış kayıtları aktif listeden temizler.
+        Böylece oyuncular kilitli kalmaz.
+        """
+        now = int(datetime.now(timezone.utc).timestamp())
+        silinecekler = []
+        for k, v in list(self.aktif_cagrilar.items()):
+            ts = v.get("timestamp", 0)
+            status = v.get("status", "beklemede")
+            if (now - ts > 600) or status != "beklemede":
+                silinecekler.append(k)
+        for k in silinecekler:
+            self.aktif_cagrilar.pop(k, None)
 
     def cog_unload(self):
         self.mod_takip_loop.cancel()
@@ -135,8 +187,17 @@ class ModCagri(commands.Cog):
         player_id = player_raw.split(":")[1] if ":" in player_raw else "0"
         player_key = player_name.lower()
 
+        # Eğer zaten aktif çağrı varsa durumunu ve yaşını kontrol et
         if player_key in self.aktif_cagrilar:
-            return None
+            mevcut = self.aktif_cagrilar[player_key]
+            now_ts = int(datetime.now(timezone.utc).timestamp())
+            c_ts = mevcut.get("timestamp", 0)
+            if (now_ts - c_ts > 600) or (mevcut.get("status") != "beklemede"):
+                self.aktif_cagrilar.pop(player_key, None)
+            else:
+                # Gerçekten aktif ve 10 dakikadan taze bir çağrısı var, spam engeli
+                print(f"[MOD ÇAĞRI] {player_name} zaten aktif bir çağrıya sahip ({now_ts - c_ts}s önce). Mükerrer bildirim engellendi.", flush=True)
+                return None
 
         tz_tr = timezone(timedelta(hours=3))
         dt_ts = datetime.fromtimestamp(ts, tz=timezone.utc) if ts else datetime.now(tz_tr)
@@ -295,6 +356,9 @@ class ModCagri(commands.Cog):
         if not self.bot.is_ready():
             return
 
+        # 10 dakikadan eski veya kapanmış çağrıları otomatik olarak aktif RAM'den düşür
+        self.stale_cagrilari_temizle()
+
         api_key = os.getenv("ERLC_API_KEY")
         if not api_key:
             return
@@ -343,6 +407,13 @@ class ModCagri(commands.Cog):
                     if mc_id not in self.islenen_komutlar:
                         self.islenen_komutlar.add(mc_id)
                         degisiklik_oldu = True
+
+                        if caller_key in self.aktif_cagrilar:
+                            mevcut = self.aktif_cagrilar[caller_key]
+                            now_ts = int(datetime.now(timezone.utc).timestamp())
+                            if (now_ts - mevcut.get("timestamp", 0) > 600) or (mevcut.get("status") != "beklemede"):
+                                self.aktif_cagrilar.pop(caller_key, None)
+
                         if caller_key not in self.aktif_cagrilar:
                             await self.discorda_cagri_gonder(
                                 kanal, caller_raw, "Oyun İçi ModCall (:mod)", ts
@@ -379,6 +450,12 @@ class ModCagri(commands.Cog):
                 if cmd_lower.startswith((":mod", "!mod", ";mod", ":modcall", "!modcall", ";modcall", ":yardim", "!yardim", ":destek", "!destek")):
                     caller_name = player_raw.split(":")[0]
                     caller_key = caller_name.lower()
+
+                    if caller_key in self.aktif_cagrilar:
+                        mevcut = self.aktif_cagrilar[caller_key]
+                        now_ts = int(datetime.now(timezone.utc).timestamp())
+                        if (now_ts - mevcut.get("timestamp", 0) > 600) or (mevcut.get("status") != "beklemede"):
+                            self.aktif_cagrilar.pop(caller_key, None)
 
                     if caller_key not in self.aktif_cagrilar:
                         gerekce_parcalar = cmd.split(maxsplit=1)
@@ -472,6 +549,44 @@ class ModCagri(commands.Cog):
             f"✅ `{mod_adi}` yetkilisinin `{roblox_adi}` oyuncusuna `:to` attığı simüle edildi. {kanal.mention} kanalındaki log griye dönmüş ve etiket silinmiş olmalı!",
             ephemeral=True
         )
+
+    @app_commands.command(name="cagri-temizle", description="Aktif moderatör çağrı kuyruğunu veya belirtilen oyuncunun çağrısını sıfırlar.")
+    @app_commands.describe(
+        roblox_adi="Sıfırlanacak oyuncunun Roblox adı (boş bırakılırsa tüm aktif çağrılar temizlenir)"
+    )
+    async def cagri_temizle(self, interaction: discord.Interaction, roblox_adi: Optional[str] = None):
+        if interaction.user.id != ASIL_KURUCU_ID and not interaction.user.guild_permissions.administrator:
+            return await interaction.response.send_message("❌ Bu komutu sadece **Kurucu** veya **Yönetici** kullanabilir!", ephemeral=True)
+
+        cagri_data = load_json(CAGRILAR_FILE, {"aktif_cagrilar": {}, "gecmis_cagrilar": []})
+        aktif_disk = cagri_data.get("aktif_cagrilar", {})
+
+        if roblox_adi:
+            caller_key = roblox_adi.lower()
+            ram_silindi = self.aktif_cagrilar.pop(caller_key, None)
+            disk_silindi = aktif_disk.pop(caller_key, None)
+            cagri_data["aktif_cagrilar"] = self.aktif_cagrilar
+            await async_save_json(CAGRILAR_FILE, cagri_data)
+
+            if ram_silindi or disk_silindi:
+                await interaction.response.send_message(
+                    f"✅ `{roblox_adi}` adlı oyuncunun aktif çağrısı sıfırlandı. Artık yeni `!mod` atabilir.",
+                    ephemeral=True
+                )
+            else:
+                await interaction.response.send_message(
+                    f"ℹ️ `{roblox_adi}` adına ait aktif bir çağrı bulunamadı.",
+                    ephemeral=True
+                )
+        else:
+            toplam = len(self.aktif_cagrilar)
+            self.aktif_cagrilar.clear()
+            cagri_data["aktif_cagrilar"] = {}
+            await async_save_json(CAGRILAR_FILE, cagri_data)
+            await interaction.response.send_message(
+                f"✅ Toplam **{toplam}** aktif çağrı tamamen temizlendi ve sıfırlandı.",
+                ephemeral=True
+            )
 
 
 async def setup(bot: commands.Bot):
