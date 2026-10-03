@@ -151,6 +151,7 @@ class ModCagri(commands.Cog):
 
         # Bot başlarken 10 dakikadan eski veya kapanmış çağrıları temizle
         self.stale_cagrilari_temizle()
+        print(f"[MOD ÇAĞRI BAŞLATILDI v2] Aktif çağrı sayısı: {len(self.aktif_cagrilar)}, İşlenen komut: {len(self.islenen_komutlar)}", flush=True)
 
         self.mod_takip_loop.start()
 
@@ -384,7 +385,7 @@ class ModCagri(commands.Cog):
                 command_logs = data.get("CommandLogs", [])
                 mod_calls = data.get("ModCalls", [])
         except Exception as e:
-            # Geçici bağlantı kopmalarını logla
+            print(f"[MOD ÇAĞRI API BAĞLANTI HATASI] {e}", flush=True)
             return
 
         degisiklik_oldu = False
@@ -448,6 +449,7 @@ class ModCagri(commands.Cog):
 
                 # A) Çağrı Komutları (:mod, !mod, ;mod, :modcall, !modcall, :yardim, !yardim)
                 if cmd_lower.startswith((":mod", "!mod", ";mod", ":modcall", "!modcall", ";modcall", ":yardim", "!yardim", ":destek", "!destek")):
+                    print(f"[MOD ÇAĞRI ALGILANDI] {player_raw} komut: '{cmd}'", flush=True)
                     caller_name = player_raw.split(":")[0]
                     caller_key = caller_name.lower()
 
@@ -456,6 +458,8 @@ class ModCagri(commands.Cog):
                         now_ts = int(datetime.now(timezone.utc).timestamp())
                         if (now_ts - mevcut.get("timestamp", 0) > 600) or (mevcut.get("status") != "beklemede"):
                             self.aktif_cagrilar.pop(caller_key, None)
+                        else:
+                            print(f"[MOD ÇAĞRI ENGEL] {caller_name} zaten aktif çağrıda! Status: {mevcut.get('status')}", flush=True)
 
                     if caller_key not in self.aktif_cagrilar:
                         gerekce_parcalar = cmd.split(maxsplit=1)
