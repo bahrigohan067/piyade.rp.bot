@@ -393,6 +393,10 @@ class ModCagri(commands.Cog):
         # =========================================================================
         # 1. KAYNAK: ModCalls (ER:LC Resmi Moderatör Çağrı Listesi)
         # =========================================================================
+        # NOT: ER:LC'nin ModCalls listesi oyun içi ":mod" komutundan tetiklenir.
+        # Kullanıcı :mod ve ;mod çağrılarını kesinlikle istemediği için (SADECE !mod istendiği için),
+        # ModCalls üzerinden yeni çağrı bildirimi GÖNDERİLMİYOR.
+        # Sadece in-game bir yetkili çağrıyı devraldıysa (Moderator != null), aktif !mod çağrısını çözmek için kullanılır.
         if mod_calls:
             for mc in mod_calls:
                 caller_raw = str(mc.get("Caller", "Bilinmiyor:0"))
@@ -404,21 +408,11 @@ class ModCagri(commands.Cog):
                 caller_key = caller_name.lower()
 
                 # A) Eğer henüz bir moderatör yanıtlamadıysa (Moderator == null):
+                # :mod ve ;mod yok sayıldığından yeni bildirim atılmaz, sadece işlendi olarak işaretlenir.
                 if not moderator_raw:
                     if mc_id not in self.islenen_komutlar:
                         self.islenen_komutlar.add(mc_id)
                         degisiklik_oldu = True
-
-                        if caller_key in self.aktif_cagrilar:
-                            mevcut = self.aktif_cagrilar[caller_key]
-                            now_ts = int(datetime.now(timezone.utc).timestamp())
-                            if (now_ts - mevcut.get("timestamp", 0) > 600) or (mevcut.get("status") != "beklemede"):
-                                self.aktif_cagrilar.pop(caller_key, None)
-
-                        if caller_key not in self.aktif_cagrilar:
-                            await self.discorda_cagri_gonder(
-                                kanal, caller_raw, "Oyun İçi ModCall (:mod)", ts
-                            )
 
                 # B) Eğer bir moderatör in-game yanıtladıysa (Moderator != null):
                 else:
@@ -447,8 +441,13 @@ class ModCagri(commands.Cog):
 
                 cmd_lower = cmd.lower()
 
-                # A) Çağrı Komutları (:mod, !mod, ;mod, :modcall, !modcall, :yardim, !yardim)
-                if cmd_lower.startswith((":mod", "!mod", ";mod", ":modcall", "!modcall", ";modcall", ":yardim", "!yardim", ":destek", "!destek")):
+                # :mod ve ;mod kesinlikle yok sayılır (kullanıcı talebi: sadece !mod dikkate alınır)
+                if cmd_lower.startswith((":mod", ";mod")):
+                    print(f"[MOD ÇAĞRI YOK SAYILDI] {player_raw} komut: '{cmd}' (:mod ve ;mod devre dışı)", flush=True)
+                    continue
+
+                # A) Çağrı Komutları (SADECE !mod ve !modcall kabul edilir)
+                if cmd_lower.startswith(("!mod", "!modcall")):
                     print(f"[MOD ÇAĞRI ALGILANDI] {player_raw} komut: '{cmd}'", flush=True)
                     caller_name = player_raw.split(":")[0]
                     caller_key = caller_name.lower()
