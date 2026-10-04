@@ -64,82 +64,66 @@ def clean_ascii_for_roblox(text: str) -> str:
 
 async def send_erlc_command(command_text: str) -> dict:
     """
-    Roblox ER:LC sunucusuna uzaktan komut gönderir (Örn: :m, :h).
-    Hem v2 hem de v1 endpoint'lerini dener, HTTP 200 veya 204'ü başarılı sayar.
-    Sunucu boş (422) veya yetkisiz (403) durumlarını detaylı yakalar.
+    Roblox ER:LC sunucusuna uzaktan komut gönderir (Örn: :m).
+    Official endpoint: POST https://api.erlc.gg/v2/server/command
+    Fallback endpoint: POST https://api.erlc.gg/v1/server/command
     """
     api_key = os.getenv("ERLC_API_KEY")
     if not api_key:
-        msg = "ERLC_API_KEY ortam değişkeni bulunamadı! Bot ortam ayarlarını kontrol edin."
+        msg = "ERLC_API_KEY ortam değişkeni bulunamadı! Lütfen Railway ortam değişkenlerini kontrol edin."
         print(f"[RP OYLAMA UYARI] {msg}", flush=True)
         return {"success": False, "message": msg, "status": None}
 
     headers = {
-        "Server-Key": api_key,
         "server-key": api_key,
-        "Content-Type": "application/json",
-        "User-Agent": "PiyadeRP-Bot/2.0"
+        "Content-Type": "application/json"
     }
 
-    guvenli_komut = clean_ascii_for_roblox(command_text)
+    url = "https://api.erlc.gg/v2/server/command"
+    payload = {"command": command_text}
 
-    endpoints = [
-        "https://api.erlc.gg/v2/server/command",
-        "https://api.erlc.gg/v1/server/command"
-    ]
+    try:
+        timeout = aiohttp.ClientTimeout(total=8)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(url, headers=headers, json=payload) as resp:
+                status = resp.status
+                resp_text = await resp.text()
 
-    son_hata = ""
-    son_status = None
+                # Eğer v2 404 dönerse v1'i dene
+                if status == 404:
+                    url_v1 = "https://api.erlc.gg/v1/server/command"
+                    async with session.post(url_v1, headers=headers, json=payload) as resp_v1:
+                        status = resp_v1.status
+                        resp_text = await resp_v1.text()
 
-    for url in endpoints:
-        for cmd_deneme in ([command_text] if command_text == guvenli_komut else [command_text, guvenli_komut]):
-            payload = {"command": cmd_deneme}
-            try:
-                timeout = aiohttp.ClientTimeout(total=7)
-                async with aiohttp.ClientSession(timeout=timeout) as session:
-                    async with session.post(url, headers=headers, json=payload) as resp:
-                        son_status = resp.status
-                        if resp.status in (200, 204):
-                            print(f"[RP OYLAMA BAŞARILI] Roblox ER:LC anonsu iletildi: '{cmd_deneme}' ({url} -> HTTP {resp.status})", flush=True)
-                            return {
-                                "success": True,
-                                "command": cmd_deneme,
-                                "status": resp.status,
-                                "message": f"Komut başarıyla oyuna iletildi (`{cmd_deneme}`)."
-                            }
-                        elif resp.status == 422:
-                            resp_text = await resp.text()
-                            son_hata = "Oyunda hiç oyuncu bulunmadığı için (0 kişi) ER:LC komut çalıştıramadı (HTTP 422)."
-                            print(f"[RP OYLAMA BİLGİ] {son_hata} ({resp_text})", flush=True)
-                            return {
-                                "success": False,
-                                "command": cmd_deneme,
-                                "status": 422,
-                                "message": son_hata
-                            }
-                        elif resp.status == 403:
-                            son_hata = "ER:LC API anahtarı geçersiz veya yetkisiz (HTTP 403)."
-                            print(f"[RP OYLAMA HATA] {son_hata}", flush=True)
-                            return {
-                                "success": False,
-                                "command": cmd_deneme,
-                                "status": 403,
-                                "message": son_hata
-                            }
-                        else:
-                            resp_text = await resp.text()
-                            son_hata = f"HTTP {resp.status}: {resp_text}"
-                            print(f"[RP OYLAMA HATA] {url} başarısız oldu ({resp.status}): {resp_text}", flush=True)
-            except Exception as e:
-                son_hata = str(e)
-                print(f"[RP OYLAMA HATA] {url} istek istisnası: {e}", flush=True)
-
-    return {
-        "success": False,
-        "command": command_text,
-        "status": son_status,
-        "message": f"ER:LC anonsu iletilemedi ({son_hata})"
-    }
+                if status in (200, 204):
+                    print(f"[RP OYLAMA BAŞARILI] Roblox ER:LC anonsu iletildi: '{command_text}' (HTTP {status})", flush=True)
+                    return {
+                        "success": True,
+                        "command": command_text,
+                        "status": status,
+                        "message": f"Komut başarıyla oyuna iletildi (`{command_text}`)."
+                    }
+                elif status == 422:
+                    msg = "Oyunda hiç oyuncu bulunmadığı için ER:LC komut çalıştıramadı (Sunucu boş veya kapalı)."
+                    print(f"[RP OYLAMA BİLGİ] {msg} ({resp_text})", flush=True)
+                    return {"success": False, "command": command_text, "status": 422, "message": msg}
+                elif status == 429:
+                    msg = "ER:LC API hız sınırına (Rate Limit: 5 saniyede 1 komut) takıldı. Lütfen biraz bekleyin."
+                    print(f"[RP OYLAMA UYARI] {msg} ({resp_text})", flush=True)
+                    return {"success": False, "command": command_text, "status": 429, "message": msg}
+                elif status == 403:
+                    msg = "ER:LC API anahtarı yetkisiz veya sunucu komut izni kapalı (HTTP 403)."
+                    print(f"[RP OYLAMA HATA] {msg} ({resp_text})", flush=True)
+                    return {"success": False, "command": command_text, "status": 403, "message": msg}
+                else:
+                    msg = f"HTTP {status}: {resp_text}"
+                    print(f"[RP OYLAMA HATA] ER:LC komut başarısız: {msg}", flush=True)
+                    return {"success": False, "command": command_text, "status": status, "message": msg}
+    except Exception as e:
+        msg = f"İstek hatası: {e}"
+        print(f"[RP OYLAMA HATA] {msg}", flush=True)
+        return {"success": False, "command": command_text, "status": None, "message": msg}
 
 async def send_erlc_announcement(command_text: str = ":m RP Başlamıştır , herkese iyi roller.") -> dict:
     """Geriye uyumluluk için send_erlc_announcement fonksiyonu send_erlc_command'ı çağırır."""
@@ -493,11 +477,9 @@ class RPOylama(commands.Cog):
         self.rp_aktif = True
         self.kaydet_durum()
 
-        # 1. Roblox ER:LC sunucusuna anons komutunu ilet (:m ve :h)
+        # 1. Roblox ER:LC sunucusuna anons komutunu ilet (:m)
         erlc_komut = ":m RP Başlamıştır , herkese iyi roller."
         anons_sonuc = await send_erlc_announcement(erlc_komut)
-        # Ek olarak üst ekran bildirimi de gönder
-        await send_erlc_announcement(":h [PİYADE RP] Rol Başlamıştır! Herkese iyi roller.")
 
         # 2. Panel kanalındaki embed'i Yeşile çevir ve butonu kaldır
         channel = self.bot.get_channel(PANEL_KANAL_ID)
@@ -562,10 +544,9 @@ class RPOylama(commands.Cog):
         # Eğer bildirim gönderilecekse (Saat 01:00 olduğunda veya yetkili /rp-durdur kullandığında)
         anons_sonuc = None
         if bildirim_gonder:
-            # 1. Roblox ER:LC oyun içi kapanış anonsu (:m ve :h)
+            # 1. Roblox ER:LC oyun içi kapanış anonsu (:m)
             erlc_komut = ":m Rol bitmiştir , herkese iyi istirahatler dileriz."
             anons_sonuc = await send_erlc_announcement(erlc_komut)
-            await send_erlc_announcement(":h [PİYADE RP] Rol bitmiştir! Herkese iyi istirahatler.")
 
             # 2. Whitelist duyuru kanalına pingli kapanış bildirimi
             await self.kapanis_duyuru_gonder()
