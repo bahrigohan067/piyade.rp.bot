@@ -52,32 +52,98 @@ def generate_progress_bar(current: int, total: int, length: int = 5) -> str:
     empty = length - filled
     return f"`[ {'🟩 ' * filled}{'⬜ ' * empty}]` **( {current} / {total} Oyuncu )**"
 
-async def send_erlc_announcement(command_text: str = ":m RP Başlamıştır , herkese iyi roller.") -> bool:
+def clean_ascii_for_roblox(text: str) -> str:
+    """Roblox ER:LC komut satırının bozabileceği Türkçe karakterleri güvenli harflere çevirir."""
+    tr_map = {
+        'ı': 'i', 'İ': 'I', 'ş': 's', 'Ş': 'S', 'ğ': 'g', 'Ğ': 'G',
+        'ü': 'u', 'Ü': 'U', 'ö': 'o', 'Ö': 'O', 'ç': 'c', 'Ç': 'C'
+    }
+    for tr_char, safe_char in tr_map.items():
+        text = text.replace(tr_char, safe_char)
+    return text
+
+async def send_erlc_command(command_text: str) -> dict:
+    """
+    Roblox ER:LC sunucusuna uzaktan komut gönderir (Örn: :m, :h).
+    Hem v2 hem de v1 endpoint'lerini dener, HTTP 200 veya 204'ü başarılı sayar.
+    Sunucu boş (422) veya yetkisiz (403) durumlarını detaylı yakalar.
+    """
     api_key = os.getenv("ERLC_API_KEY")
     if not api_key:
-        print("[RP OYLAMA UYARI] ERLC_API_KEY ortam değişkeni bulunamadı! Oyun içi anons gönderilemedi.", flush=True)
-        return False
-    url = "https://api.erlc.gg/v1/server/command"
+        msg = "ERLC_API_KEY ortam değişkeni bulunamadı! Bot ortam ayarlarını kontrol edin."
+        print(f"[RP OYLAMA UYARI] {msg}", flush=True)
+        return {"success": False, "message": msg, "status": None}
+
     headers = {
         "Server-Key": api_key,
-        "Content-Type": "application/json"
+        "server-key": api_key,
+        "Content-Type": "application/json",
+        "User-Agent": "PiyadeRP-Bot/2.0"
     }
-    payload = {
-        "command": command_text
+
+    guvenli_komut = clean_ascii_for_roblox(command_text)
+
+    endpoints = [
+        "https://api.erlc.gg/v2/server/command",
+        "https://api.erlc.gg/v1/server/command"
+    ]
+
+    son_hata = ""
+    son_status = None
+
+    for url in endpoints:
+        for cmd_deneme in ([command_text] if command_text == guvenli_komut else [command_text, guvenli_komut]):
+            payload = {"command": cmd_deneme}
+            try:
+                timeout = aiohttp.ClientTimeout(total=7)
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    async with session.post(url, headers=headers, json=payload) as resp:
+                        son_status = resp.status
+                        if resp.status in (200, 204):
+                            print(f"[RP OYLAMA BAŞARILI] Roblox ER:LC anonsu iletildi: '{cmd_deneme}' ({url} -> HTTP {resp.status})", flush=True)
+                            return {
+                                "success": True,
+                                "command": cmd_deneme,
+                                "status": resp.status,
+                                "message": f"Komut başarıyla oyuna iletildi (`{cmd_deneme}`)."
+                            }
+                        elif resp.status == 422:
+                            resp_text = await resp.text()
+                            son_hata = "Oyunda hiç oyuncu bulunmadığı için (0 kişi) ER:LC komut çalıştıramadı (HTTP 422)."
+                            print(f"[RP OYLAMA BİLGİ] {son_hata} ({resp_text})", flush=True)
+                            return {
+                                "success": False,
+                                "command": cmd_deneme,
+                                "status": 422,
+                                "message": son_hata
+                            }
+                        elif resp.status == 403:
+                            son_hata = "ER:LC API anahtarı geçersiz veya yetkisiz (HTTP 403)."
+                            print(f"[RP OYLAMA HATA] {son_hata}", flush=True)
+                            return {
+                                "success": False,
+                                "command": cmd_deneme,
+                                "status": 403,
+                                "message": son_hata
+                            }
+                        else:
+                            resp_text = await resp.text()
+                            son_hata = f"HTTP {resp.status}: {resp_text}"
+                            print(f"[RP OYLAMA HATA] {url} başarısız oldu ({resp.status}): {resp_text}", flush=True)
+            except Exception as e:
+                son_hata = str(e)
+                print(f"[RP OYLAMA HATA] {url} istek istisnası: {e}", flush=True)
+
+    return {
+        "success": False,
+        "command": command_text,
+        "status": son_status,
+        "message": f"ER:LC anonsu iletilemedi ({son_hata})"
     }
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, headers=headers, json=payload, timeout=8) as resp:
-                if resp.status == 200:
-                    print(f"[RP OYLAMA BAŞARILI] Roblox ER:LC anonsu iletildi: {command_text}", flush=True)
-                    return True
-                else:
-                    text = await resp.text()
-                    print(f"[RP OYLAMA HATA] ER:LC komut isteği başarısız oldu ({resp.status}): {text}", flush=True)
-                    return False
-    except Exception as e:
-        print(f"[RP OYLAMA HATA] ER:LC API isteğinde istisna: {e}", flush=True)
-        return False
+
+async def send_erlc_announcement(command_text: str = ":m RP Başlamıştır , herkese iyi roller.") -> dict:
+    """Geriye uyumluluk için send_erlc_announcement fonksiyonu send_erlc_command'ı çağırır."""
+    return await send_erlc_command(command_text)
 
 def yetkili_mi(interaction: discord.Interaction) -> bool:
     if interaction.user.guild_permissions.administrator:
@@ -427,9 +493,11 @@ class RPOylama(commands.Cog):
         self.rp_aktif = True
         self.kaydet_durum()
 
-        # 1. Roblox ER:LC sunucusuna anons komutunu ilet
+        # 1. Roblox ER:LC sunucusuna anons komutunu ilet (:m ve :h)
         erlc_komut = ":m RP Başlamıştır , herkese iyi roller."
-        await send_erlc_announcement(erlc_komut)
+        anons_sonuc = await send_erlc_announcement(erlc_komut)
+        # Ek olarak üst ekran bildirimi de gönder
+        await send_erlc_announcement(":h [PİYADE RP] Rol Başlamıştır! Herkese iyi roller.")
 
         # 2. Panel kanalındaki embed'i Yeşile çevir ve butonu kaldır
         channel = self.bot.get_channel(PANEL_KANAL_ID)
@@ -457,6 +525,7 @@ class RPOylama(commands.Cog):
 
         # 3. Whitelist duyuru kanalına pingli duyuruyu gönder
         await self.duyuru_gonder(tetikleyen)
+        return anons_sonuc
 
     async def duyuru_gonder(self, tetikleyen: Optional[discord.User] = None):
         duyuru_kanali = self.bot.get_channel(DUYURU_KANAL_ID)
@@ -491,16 +560,19 @@ class RPOylama(commands.Cog):
         self.kaydet_durum()
 
         # Eğer bildirim gönderilecekse (Saat 01:00 olduğunda veya yetkili /rp-durdur kullandığında)
+        anons_sonuc = None
         if bildirim_gonder:
-            # 1. Roblox ER:LC oyun içi kapanış anonsu
+            # 1. Roblox ER:LC oyun içi kapanış anonsu (:m ve :h)
             erlc_komut = ":m Rol bitmiştir , herkese iyi istirahatler dileriz."
-            await send_erlc_announcement(erlc_komut)
+            anons_sonuc = await send_erlc_announcement(erlc_komut)
+            await send_erlc_announcement(":h [PİYADE RP] Rol bitmiştir! Herkese iyi istirahatler.")
 
             # 2. Whitelist duyuru kanalına pingli kapanış bildirimi
             await self.kapanis_duyuru_gonder()
 
         # 3. Panel kanalındaki eski mesajları temizle ve gece panelini yerleştir
         await self.temizle_ve_panel_gonder("GECE")
+        return anons_sonuc
 
     async def gunduz_moduna_gec(self):
         """12:00 gündüz oylama moduna geçiş: Eski mesajları sil, oylama panelini koy."""
@@ -591,8 +663,20 @@ class RPOylama(commands.Cog):
             return await interaction.response.send_message("❌ Bu komutu kullanmak için yetkiniz bulunmamaktadır.", ephemeral=True)
 
         await interaction.response.defer(ephemeral=True)
-        await self.rolu_baslat(tetikleyen=interaction.user)
-        await interaction.followup.send("🟢 **Rol başarıyla manuel olarak başlatıldı!** Panel yeşile çevrildi ve anonslar yapıldı.", ephemeral=True)
+        anons_sonuc = await self.rolu_baslat(tetikleyen=interaction.user)
+
+        if anons_sonuc and anons_sonuc.get("success"):
+            anons_bilgi = f"✅ `{anons_sonuc.get('command')}` oyuna iletildi (HTTP {anons_sonuc.get('status')})"
+        else:
+            hata_mesaji = anons_sonuc.get("message") if anons_sonuc else "Bilinmeyen hata"
+            anons_bilgi = f"⚠️ {hata_mesaji}"
+
+        await interaction.followup.send(
+            f"🟢 **Rol başarıyla manuel olarak başlatıldı!**\n"
+            f"📢 **Duyuru:** <#{DUYURU_KANAL_ID}> kanalına bildirim geçildi.\n"
+            f"🎮 **ER:LC Oyun Anonsu:** {anons_bilgi}",
+            ephemeral=True
+        )
 
     @app_commands.command(name="rp-durdur", description="Rolü sonlandırır, anonsları geçer ve kanalı gece dinlenme moduna alır.")
     async def cmd_rp_durdur(self, interaction: discord.Interaction):
@@ -600,8 +684,20 @@ class RPOylama(commands.Cog):
             return await interaction.response.send_message("❌ Bu komutu kullanmak için yetkiniz bulunmamaktadır.", ephemeral=True)
 
         await interaction.response.defer(ephemeral=True)
-        await self.gece_moduna_gec(bildirim_gonder=True)
-        await interaction.followup.send("🌙 **Rol sonlandırıldı!** Roblox'a kapanış anonsu gönderildi, Whitelist rolü etiketlenerek duyuru geçildi ve kanal gece dinlenme moduna alındı.", ephemeral=True)
+        anons_sonuc = await self.gece_moduna_gec(bildirim_gonder=True)
+
+        if anons_sonuc and anons_sonuc.get("success"):
+            anons_bilgi = f"✅ `{anons_sonuc.get('command')}` oyuna iletildi (HTTP {anons_sonuc.get('status')})"
+        else:
+            hata_mesaji = anons_sonuc.get("message") if anons_sonuc else "Bilinmeyen hata"
+            anons_bilgi = f"⚠️ {hata_mesaji}"
+
+        await interaction.followup.send(
+            f"🌙 **Rol sonlandırıldı!**\n"
+            f"📢 **Duyuru:** <#{DUYURU_KANAL_ID}> kanalına kapanış bildirimi atıldı.\n"
+            f"🎮 **ER:LC Oyun Kapanış Anonsu:** {anons_bilgi}",
+            ephemeral=True
+        )
 
     @app_commands.command(name="rp-hedef-belirle", description="Rol başlangıcı için gereken hedef oy sayısını belirler.")
     @app_commands.describe(sayi="Rolün başlaması için gereken oy barajı (Varsayılan: 5)")
@@ -662,6 +758,40 @@ class RPOylama(commands.Cog):
             embed.add_field(name="👥 Oy Kullananlar", value="*Henüz kimse oy kullanmadı.*", inline=False)
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+    @app_commands.command(name="oyun-anons", description="Roblox ER:LC sunucusuna anlık :m veya :h duyurusu gönderir.")
+    @app_commands.describe(
+        tip="Anons tipi (:m = Ekran Ortası Mesajı, :h = Üst Bilgi Çubuğu/Hint)",
+        mesaj="Oyunda görüntülenecek anons metni"
+    )
+    @app_commands.choices(tip=[
+        app_commands.Choice(name=":m - Büyük Ekran Mesajı (Modal)", value=":m"),
+        app_commands.Choice(name=":h - Üst Bildirim Çubuğu (Hint)", value=":h")
+    ])
+    async def cmd_oyun_anons(self, interaction: discord.Interaction, tip: app_commands.Choice[str], mesaj: str):
+        if not yetkili_mi(interaction):
+            return await interaction.response.send_message("❌ Bu komutu kullanmak için yetkiniz bulunmamaktadır.", ephemeral=True)
+
+        await interaction.response.defer(ephemeral=True)
+        tam_komut = f"{tip.value} {mesaj}"
+        sonuc = await send_erlc_command(tam_komut)
+
+        if sonuc.get("success"):
+            await interaction.followup.send(
+                f"✅ **Oyun İçi Anons Başarıyla Gönderildi!**\n"
+                f"🎮 **Komut:** `{sonuc.get('command')}`\n"
+                f"📊 **API Yanıtı:** HTTP {sonuc.get('status')}",
+                ephemeral=True
+            )
+        else:
+            await interaction.followup.send(
+                f"❌ **Anons Gönderilemedi!**\n"
+                f"🎮 **Denenen Komut:** `{tam_komut}`\n"
+                f"⚠️ **Hata / Durum:** {sonuc.get('message')}\n"
+                f"ℹ️ *Not: Eğer oyun sunucusunda şu an hiç oyuncu yoksa (0 kişi) ER:LC API komut çalıştırmaz (HTTP 422).* ",
+                ephemeral=True
+            )
 
 
 async def setup(bot: commands.Bot):
