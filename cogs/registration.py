@@ -336,6 +336,10 @@ async def roblox_katilma_istegi_bul(roblox_id: str) -> tuple[str, str | None]:
                 if resp.status in (401, 403):
                     print(f"[KAYIT] Open Cloud yetki hatası: {resp.status} {await resp.text()}", flush=True)
                     return "yetki_hatasi", None
+                if resp.status == 404:
+                    # Roblox Open Cloud v2, kullanıcının bekleyen katılma isteği yoksa 404 NOT_FOUND döner:
+                    # {"code": "NOT_FOUND", "message": "The join request with identifier ... was not found."}
+                    return "yok", None
                 if resp.status != 200:
                     print(f"[KAYIT] Open Cloud hata: {resp.status} {await resp.text()}", flush=True)
                     return "hata", None
@@ -352,10 +356,11 @@ async def roblox_katilma_istegi_bul(roblox_id: str) -> tuple[str, str | None]:
 async def roblox_istegi_kabul_et(path: str | None) -> bool:
     if not path or not ROBLOX_API_KEY:
         return False
+    clean_path = path.lstrip("/")
     try:
         async with aiohttp.ClientSession(timeout=HTTP_TIMEOUT) as session:
             async with session.post(
-                f"https://apis.roblox.com/cloud/v2/{path}:accept",
+                f"https://apis.roblox.com/cloud/v2/{clean_path}:accept",
                 json={},
                 headers={"x-api-key": ROBLOX_API_KEY, "Content-Type": "application/json"},
             ) as resp:
