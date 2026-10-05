@@ -9,85 +9,121 @@ BRUTEFORCE_LIMIT = 7  # 3 saniye içinde 7'den fazla istek (insanüstü hız)
 BRUTEFORCE_TIME_SECONDS = 3
 
 LOG_CHANNEL_ID = 1555275542452772934
-DUYURU_CHANNEL_ID = 1541355760829726760
 KURUCU_ROLE_ID = 1529546007635824680
+UST_YONETIM_ROLE_ID = 1539167256246747186
+YASAKLI_ROL_ID = 1534715583826759790
 
-# Saldırı anında duyuru kanalına atılacak metin
-DUYURU_METNI = """# 🛡️ PİYADE ROLEPLAY | GÜVENLİK BİLDİRİMİ
-
-Değerli oyuncularımız, şeffaflık ilkemiz gereği sunucumuzda az önce engellenen başarısız bir sızma girişimi hakkında sizleri bilgilendirmek istiyoruz.
-
-Sunucu altyapımıza yönelik otomatikleştirilmiş bir kaba kuvvet (brute-force/API abuse) saldırısı gerçekleştirilmiştir. Ancak **Gelişmiş Güvenlik Kalkanımız**, bu olağandışı trafiği milisaniyeler içinde tespit etmiş ve saldırganı sunucumuzdan **kalıcı olarak yasaklamıştır.**
-
-✅ **Sunucumuzdan hiçbir veri sızdırılmamıştır.**
-✅ **Hiçbir üyemizin kişisel veya oyun içi bilgisi tehlikeye girmemiştir.**
-✅ **Sistemlerimiz %100 güvendedir ve kesintisiz çalışmaya devam etmektedir.**
-
-*Olayın ardından güvenlik sistemimizin yaptığı incelemelerde, saldırıyı gerçekleştiren şahısların "Turan Roleplay" oluşumuyla doğrudan bağlantılı olduğu; saldırgan hesabın bizzat o grubun "yetkili geliştiricisi" ile uyuştuğu sistemlerimizce doğrulanmıştır.*
-
-Piyade Roleplay Yönetimi olarak; altyapımızın gücünü test etmek için kendi çaplarında çırpınan bu arkadaşlara, sistemlerimizin ne kadar **aşılmaz** olduğunu bize bir kez daha kanıtladıkları için teşekkür ederiz. 
-
-Bizler, enerjimizi bu tür başarısız ve amatör girişimlerle vakit kaybetmek yerine; projemizin asıl sahibi olan siz değerli oyuncularımıza hak ettiğiniz üst düzey ve kesintisiz rol deneyimini sunmaya harcamaya devam edeceğiz.
-
-**İyi Roller Dileriz,**
-**Piyade Roleplay Yönetimi**"""
+WHITELISTED_ROLES = [KURUCU_ROLE_ID, UST_YONETIM_ROLE_ID]
 
 class BruteForceProtection(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         # Kullanıcı ID -> Zaman Damgaları listesi
         self.user_requests = collections.defaultdict(list)
-        self.banned_users = set()  # Aynı kişiye defalarca işlem yapmamak için
+        self.suspended_users = set()  # Aynı kişiye mükerrer işlem yapılmaması için
 
     def is_whitelisted(self, user):
-        # Eğer bir sunucu üyesi değilse (mesela DM'den geliyorsa) muaf saymayalım
         if not hasattr(user, "roles"):
             return False
         
-        # Kurucu ve yüksek yönetim brute-force korumasından muaftır (Bot testleri vs. için)
-        if user.id == user.guild.owner_id:
+        # Sunucu sahibi muaf
+        if hasattr(user, "guild") and user.guild and user.id == user.guild.owner_id:
             return True
             
         for role in user.roles:
-            if role.id == KURUCU_ROLE_ID or role.permissions.administrator:
+            if role.id in WHITELISTED_ROLES or role.permissions.administrator:
                 return True
         return False
 
-    async def trigger_bruteforce_defense(self, member, guild, trigger_type):
-        if member.id in self.banned_users:
+    async def suspend_member(self, member: discord.Member, guild: discord.Guild, title: str, reason: str, details: dict = None):
+        """Kullanıcının rollerini alır, Yasaklı rolü verir, askıya alır (timeout) ve log kanalına bildirir."""
+        if member.id in self.suspended_users:
             return
-            
-        self.banned_users.add(member.id)
-        
-        # 1. LOG KANALINA BİLDİRİM
+
+        # Kullanıcı zaten yasaklı/askıda ise tekrar tetiklenme
+        if any(r.id == YASAKLI_ROL_ID for r in member.roles):
+            return
+
+        self.suspended_users.add(member.id)
         log_channel = guild.get_channel(LOG_CHANNEL_ID)
+
+        # 1. LOG KANALINA DETAYLI BİLDİRİM
         if log_channel:
             embed = discord.Embed(
-                title="🚨 BRUTE-FORCE (API) SALDIRISI ENGELLENDİ!",
-                description=f"**Saldırgan:** {member.mention} (`{member.id}`)\n**Tespit Yöntemi:** {trigger_type}\n**Eylem:** Otomatik olarak BANLANDI.",
-                color=discord.Color.brand_red()
+                title=f"🛡️ {title}",
+                description=f"**Kullanıcı:** {member.mention} (`{member.id}`)\n**Sebep / Tespit:** {reason}",
+                color=discord.Color.orange() if "PROFİL" in title.upper() else discord.Color.brand_red()
             )
-            embed.set_footer(text="Piyade Roleplay WAF Kalkanı")
+            if details:
+                for k, v in details.items():
+                    embed.add_field(name=k, value=v, inline=True)
+
+            embed.add_field(
+                name="⚡ Uygulanan Güvenlik Önlemleri",
+                value="• Kişinin tüm rolleri alındı.\n• Yasaklı (Askı) rolü verildi.\n• 28 gün süreyle askıya alındı (Timeout).",
+                inline=False
+            )
+            embed.set_footer(text="Piyade Roleplay Güvenlik Kalkanı")
             embed.timestamp = discord.utils.utcnow()
             try:
                 await log_channel.send(content=f"<@&{KURUCU_ROLE_ID}>", embed=embed)
-            except:
-                pass
+            except Exception as e:
+                print(f"[bruteforce_protection] Log gönderilemedi: {e}")
 
-        # 2. KULLANICIYI BANLA
-        try:
-            await member.ban(reason="WAF Koruması: Otomatik Brute-Force / API Abuse Saldırısı Tespiti")
-        except Exception as e:
-            if log_channel:
-                await log_channel.send(f"⚠️ Hata: Kullanıcı banlanamadı (Yetki eksikliği olabilir): {e}")
-
-        # 3. DUYURU KANALINA HALK BİLDİRİMİ GÖNDER
-        duyuru_channel = guild.get_channel(DUYURU_CHANNEL_ID)
-        if duyuru_channel:
+        # 2. KİŞİNİN TÜM ROLLERİNİ AL
+        roles_to_remove = [
+            r for r in member.roles
+            if r.id != guild.id
+            and not r.is_integration()
+            and not r.is_premium_subscriber()
+            and r < guild.me.top_role
+        ]
+        if roles_to_remove:
             try:
-                await duyuru_channel.send(content=DUYURU_METNI)
-            except:
-                pass
+                await member.remove_roles(*roles_to_remove, reason=f"Güvenlik Kalkanı: {reason} - Tüm rolleri alındı")
+            except Exception as e:
+                print(f"[bruteforce_protection] Roller alınamadı: {e}")
+                if log_channel:
+                    try:
+                        await log_channel.send(f"⚠️ Hata: {member.mention} kullanıcısının rolleri alınırken hata oluştu: {e}")
+                    except:
+                        pass
+
+        # 3. YASAKLI ROLÜNÜ VER (ASKI ROLÜ)
+        yasakli_rol = guild.get_role(YASAKLI_ROL_ID)
+        if yasakli_rol and yasakli_rol < guild.me.top_role:
+            try:
+                await member.add_roles(yasakli_rol, reason=f"Güvenlik Kalkanı: {reason} - Askıya alındı")
+            except Exception as e:
+                print(f"[bruteforce_protection] Yasaklı rolü verilemedi: {e}")
+                if log_channel:
+                    try:
+                        await log_channel.send(f"⚠️ Hata: {member.mention} kullanıcısına Yasaklı rolü verilemedi: {e}")
+                    except:
+                        pass
+
+        # 4. KULLANICIYI ASKIYA AL (TIMEOUT - 28 GÜN)
+        try:
+            await member.timeout(timedelta(days=28), reason=f"Güvenlik Kalkanı: {reason} - Askıya alındı")
+        except Exception as e:
+            print(f"[bruteforce_protection] Timeout uygulanamadı: {e}")
+            if log_channel:
+                try:
+                    await log_channel.send(f"⚠️ Hata: {member.mention} kullanıcısına timeout uygulanamadı: {e}")
+                except:
+                    pass
+
+        # NOT: DUYURU KANALINA ASLA MESAJ GÖNDERİLMEZ (Duyuru mesajı gönderimi tamamen kaldırılmıştır)
+
+    async def trigger_bruteforce_defense(self, member, guild, trigger_type):
+        """API abuse ve brute-force saldırılarında kullanıcıyı askıya alır."""
+        await self.suspend_member(
+            member=member,
+            guild=guild,
+            title="BRUTE-FORCE / API SUİSTİMALİ ENGELLENDİ!",
+            reason=trigger_type,
+            details={"Tespit Yöntemi": f"`{trigger_type}`"}
+        )
 
     async def register_request(self, user, guild, trigger_type):
         if user.bot or not guild:
@@ -104,7 +140,7 @@ class BruteForceProtection(commands.Cog):
         self.user_requests[uid] = [t for t in self.user_requests[uid] if (now - t).total_seconds() <= BRUTEFORCE_TIME_SECONDS]
         
         if len(self.user_requests[uid]) >= BRUTEFORCE_LIMIT:
-            self.user_requests[uid].clear() # Temizle
+            self.user_requests[uid].clear()  # Temizle
             
             member = guild.get_member(uid)
             if member:
@@ -122,8 +158,62 @@ class BruteForceProtection(commands.Cog):
         
     @commands.Cog.listener()
     async def on_member_update(self, before, after):
-        # Çok hızlı kullanıcı profili/durum güncellemesi spamı yapan API botlarını yakala
-        await self.register_request(after, after.guild, "Aşırı Hızlı Profil Güncellemesi (API Abuse)")
+        if after.bot or not after.guild:
+            return
+            
+        guild = after.guild
+
+        # Eğer yetkili tarafından Yasaklı rolü kaldırıldıysa, askı takip listesinden çıkar
+        if YASAKLI_ROL_ID in [r.id for r in before.roles] and YASAKLI_ROL_ID not in [r.id for r in after.roles]:
+            self.suspended_users.discard(after.id)
+            return
+
+        if self.is_whitelisted(after):
+            return
+
+        # Sadece gerçek profil değişikliklerini kontrol et (rol/durum oynamalarında tetiklenmez)
+        nick_changed = (before.nick != after.nick)
+        name_changed = (before.name != after.name or before.display_name != after.display_name)
+        avatar_changed = (before.display_avatar.url != after.display_avatar.url)
+
+        if not (nick_changed or name_changed or avatar_changed):
+            return
+
+        # Denetim kaydı (Audit Log) kontrolü: Değişiklik bot veya yetkili tarafından mı yapıldı?
+        try:
+            async for entry in guild.audit_logs(limit=1, action=discord.AuditLogAction.member_update):
+                time_diff = (discord.utils.utcnow() - entry.created_at).total_seconds()
+                if entry.target.id == after.id and time_diff <= 5:
+                    if entry.user.id != after.id:
+                        # Değişiklik bot (kayıt vs.) veya yetkili tarafından yapılmış, yoksay
+                        return
+                    break
+        except Exception:
+            pass
+
+        # Değişiklik detaylarını topla
+        degisiklikler = {}
+        if nick_changed:
+            degisiklikler["📝 Eski Sunucu İsmi"] = f"`{before.nick or 'Yok'}`"
+            degisiklikler["📝 Yeni Sunucu İsmi"] = f"`{after.nick or 'Yok'}`"
+        if name_changed:
+            degisiklikler["👤 Eski Görünen Ad"] = f"`{before.display_name}`"
+            degisiklikler["👤 Yeni Görünen Ad"] = f"`{after.display_name}`"
+        if avatar_changed:
+            degisiklikler["🖼️ Eski Avatar"] = f"[Görüntüle]({before.display_avatar.url})"
+            degisiklikler["🖼️ Yeni Avatar"] = f"[Görüntüle]({after.display_avatar.url})"
+
+        # 1. Hızlı Profil Güncellemesi Rate Limit Kontrolü
+        await self.register_request(after, guild, "Aşırı Hızlı Profil Güncellemesi (API Abuse)")
+
+        # 2. Profil Değişimi Bildirimi ve Askıya Alma (Rolleri al, Yasaklı ver, Timeout at)
+        await self.suspend_member(
+            member=after,
+            guild=guild,
+            title="PROFİL DEĞİŞİKLİĞİ TESPİT EDİLDİ",
+            reason="İzinsiz Profil / İsim Güncellemesi",
+            details=degisiklikler
+        )
 
 async def setup(bot):
     await bot.add_cog(BruteForceProtection(bot))

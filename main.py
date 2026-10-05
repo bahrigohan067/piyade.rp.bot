@@ -35,8 +35,11 @@ class MyBot(commands.Bot):
             KayitButonView,
             GrupPanelView,
             KarakterPanelView,
+            CKPanelView,
+            MevcutUyePanelView,
             KayitKararButonu,
             KarakterKararButonu,
+            CKKararButonu,
             OnayView,
         )
         from cogs.tickets import TicketPanelView, CloseTicketView
@@ -53,8 +56,10 @@ class MyBot(commands.Bot):
         self.add_view(KayitButonView())
         self.add_view(GrupPanelView())
         self.add_view(KarakterPanelView())
+        self.add_view(CKPanelView())
+        self.add_view(MevcutUyePanelView())
         self.add_view(OnayView(user_id=None))
-        self.add_dynamic_items(KayitKararButonu, KarakterKararButonu)
+        self.add_dynamic_items(KayitKararButonu, KarakterKararButonu, CKKararButonu)
         self.add_view(TicketPanelView())
         self.add_view(CloseTicketView())
         self.add_view(UyariPanel())

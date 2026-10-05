@@ -21,6 +21,9 @@ ONAY_KANAL_ID = 1532828473972752555           # Yetkililerin önüne düşen ba�
 KAYIT_LOG_KANAL_ID = 1552306929571733635      # Kaydı tamamlanan üyelerin duyurusu
 GRUP_KANAL_ID = 1554038042157654016           # "PRP | Hesap Onaylama" paneli
 UYE_DOSYASI_KANAL_ID = 1554853823447703623    # Canlı üye dosyaları
+CK_PANEL_KANAL_ID = 1556759241614688369       # PRP | CK Başvurusu paneli
+CK_ONAY_KANAL_ID = 1556754470526783518        # CK başvurularının yetkili onayına düştüğü kanal
+MEVCUT_UYE_KANAL_ID = 1556759358883373096     # Mevcut Üye Grup Eşleme paneli
 DESTEK_KANAL_LINK = "https://discord.com/channels/1529545898294509589/1534770099179884564"
 
 UYE_ROL_ID = 1533919249985437706              # Üye
@@ -46,6 +49,7 @@ ROBLOX_API_KEY = os.getenv("ROBLOX_API_KEY", "").strip()
 
 THREAD_SILME_SURESI = 300        # Kayıt bitince / reddedilince thread kaç saniye sonra silinsin
 HESAP_ONAY_COOLDOWN = 30         # "Hesabımı Onayla" butonu bekleme süresi (sn)
+CK_COOLDOWN_SANIYE = 3 * 86400   # 3 gün (onaylanan CK sonrası bekleme süresi)
 
 TEMA_RENK = discord.Colour(0x2B8CFF)
 TURUNCU_RENK = discord.Colour(0xFF8A1F)
@@ -54,6 +58,7 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RED_BANNER_PATH = os.path.join(BASE_DIR, "assets", "roblox_red_banner.png")
 PANEL_BANNER_PATH = os.path.join(BASE_DIR, "assets", "yeni_banner.png")
 GRUP_PANEL_BANNER_PATH = os.path.join(BASE_DIR, "assets", "grup_panel_banner.jpg")
+CK_PANEL_BANNER_PATH = os.path.join(BASE_DIR, "assets", "ck_panel_banner.jpg")
 DATA_PATH = os.path.join(BASE_DIR, "data", "kayit_data.json")
 
 GRUP_KANAL_LINK = f"https://discord.com/channels/{GUILD_ID}/{GRUP_KANAL_ID}"
@@ -90,6 +95,9 @@ def _veri() -> dict:
         _VERI.setdefault("kullanicilar", {})
         _VERI.setdefault("roblox_index", {})
         _VERI.setdefault("silinecek_threadler", {})
+        _VERI.setdefault("kullanilan_karakterler", {})
+        _VERI.setdefault("ck_basvurulari", {})
+        _VERI.setdefault("ck_gecmisi", {})
     return _VERI
 
 
@@ -155,6 +163,45 @@ def _nick_olustur(karakter_ad: str, roblox_ad: str) -> str:
     if kalan < 3:
         return karakter_ad[:32]
     return f"{karakter_ad[:kalan]}{ek}"
+
+
+def karakter_adi_kullanildi_mi(guild: discord.Guild | None, ad: str, haric_uid: int | None = None) -> tuple[bool, str | None]:
+    """
+    Karakter adının sunucuda daha önce kullanılıp kullanılmadığını kontrol eder.
+    Dönüş: (kullanildi_mi: bool, aciklama: str | None)
+    """
+    temiz_ad = re.sub(r"\s+", " ", ad).strip().lower()
+    if not temiz_ad:
+        return True, "Geçersiz karakter adı."
+
+    kullanim = _veri()["kullanilan_karakterler"].get(temiz_ad)
+    if kullanim:
+        sahip_uid = kullanim.get("uid")
+        if haric_uid is None or sahip_uid != haric_uid:
+            return True, f"Bu isim daha önce kullanılmış."
+
+    if guild:
+        for member in guild.members:
+            if haric_uid and member.id == haric_uid:
+                continue
+            nick = member.nick or member.display_name or ""
+            if "|" in nick:
+                kr_parca = nick.split("|")[0].strip().lower()
+                if kr_parca == temiz_ad:
+                    return True, f"Bu isim şu anda aktif bir üye ({member.mention}) tarafından kullanılıyor."
+
+    return False, None
+
+
+def karakter_adi_kaydet(ad: str, uid: int):
+    """Karakter adını kalıcı olarak 'kullanılan karakterler' arşivine işler."""
+    temiz = re.sub(r"\s+", " ", ad).strip()
+    if temiz:
+        _veri()["kullanilan_karakterler"][temiz.lower()] = {
+            "ad": temiz,
+            "uid": uid,
+            "tarih": _simdi(),
+        }
 
 
 def _iso_to_unix(deger: str | None) -> int | None:
@@ -1382,6 +1429,14 @@ class KarakterModal(discord.ui.Modal, title="🎭 Karakter Oluştur"):
         if not yas.isdigit() or not (1 <= int(yas) <= 120):
             return await interaction.response.send_message("❌ Karakter yaşı yalnızca **sayı** olmalı (Örn: `24`). Lütfen butona tekrar basıp formu doldur.", ephemeral=True)
 
+        kullanildi, _ = karakter_adi_kullanildi_mi(interaction.guild, ad, interaction.user.id)
+        if kullanildi:
+            return await interaction.response.send_message(
+                f"❌ **{ad}** karakter adı sunucumuzda daha önce kullanılmış veya şu an aktif bir üyeye ait.\n"
+                "Sunucumuzda her karakter adı benzersiz olmalıdır. Lütfen butona tekrar basıp başka bir isim seçiniz.",
+                ephemeral=True,
+            )
+
         await interaction.response.defer(ephemeral=True, thinking=True)
         guild = interaction.guild
         uye = interaction.user
@@ -1481,6 +1536,7 @@ async def karakter_onayla(interaction: discord.Interaction, uid: int):
             return await interaction.followup.send("ℹ️ Bu karakter formu zaten işlenmiş.", ephemeral=True)
 
         kr = kayit["karakter"]
+        karakter_adi_kaydet(kr["ad"], uid)
         cinsiyet_rol = KIZ_ROL_ID if kayit.get("cinsiyet") == "Kız" else ERKEK_ROL_ID if kayit.get("cinsiyet") == "Erkek" else None
         ekle = [UYE_ROL_ID, WHITELIST_ROL_ID] + ([cinsiyet_rol] if cinsiyet_rol else [])
         rol_ok = await _rolleri_duzenle(uye, ekle, [KAYITSIZ_ROL_ID, GRUP_ONAY_BEKLIYOR_ROL_ID], "Kayıt tamamlandı (karakter onaylandı)")
@@ -1631,6 +1687,788 @@ class KarakterRedModal(discord.ui.Modal, title="❌ Karakter Formunu Reddet"):
 
 
 # =====================================================================
+# 4. AŞAMA — CK (ROLSEL KARAKTER YENİLEME) SİSTEMİ
+# =====================================================================
+async def ck_dosyasi_gonder(client: discord.Client, uye: discord.Member, kayit: dict, ck_data: dict, yetkili: discord.Member | None):
+    """
+    Onaylanan CK işlemi için UYE_DOSYASI_KANAL_ID kanalına tamamen yeni,
+    detaylı bir arşiv belgesi gönderir.
+    """
+    kanal = await _kanal_getir(client, UYE_DOSYASI_KANAL_ID)
+    if kanal is None:
+        return
+
+    embed = discord.Embed(
+        title="📋 Üye Dosyası • Rolsel Karakter Yenileme (CK) Belgesi",
+        description=f"{uye.mention} kullanıcısı için onaylanan CK ve karakter yenileme kaydı aşağıdadır.",
+        colour=discord.Colour(0x9B59B6),
+    )
+
+    # 1. Kullanıcı
+    embed.add_field(
+        name="👤 Discord Kullanıcısı",
+        value=f"{uye.mention} (`{uye.id}`)\n**Sunucu İsmi:** `{uye.display_name}`",
+        inline=False,
+    )
+
+    # 2. 1. Anket Bilgisi (Geçmişe yönelik kayıt bilgisi)
+    gercek_ad = kayit.get("gercek_ad") or "Eski sistem kaydı — bilgi yok"
+    cinsiyet = kayit.get("cinsiyet") or "Belirtilmedi"
+    basvuru_ts = _ts(kayit.get("basvuru_tarihi"))
+    embed.add_field(
+        name="📝 İlk Kayıt Arşivi (1. Anket)",
+        value=f"• **Gerçek Adı:** {gercek_ad}\n• **Cinsiyet:** {cinsiyet}\n• **İlk Kayıt / Başvuru Tarihi:** {basvuru_ts}",
+        inline=False,
+    )
+
+    # 3. Karakter Değişimi
+    eski_kr = ck_data.get("eski_karakter", "—")
+    yeni_kr = ck_data.get("yeni_karakter", "—")
+    yeni_yas = ck_data.get("yeni_yas", "—")
+    embed.add_field(
+        name="🎭 Karakter Bilgileri",
+        value=f"• **Eski Karakter:** `{eski_kr}`\n• **Yeni Karakter:** `{yeni_kr}`\n• **Yeni Karakter Yaşı:** `{yeni_yas}`",
+        inline=True,
+    )
+
+    # 4. Roblox Hesap Bilgisi
+    eski_r_ad = ck_data.get("eski_roblox_ad", "—")
+    eski_r_id = ck_data.get("eski_roblox_id", "")
+    yeni_r_ad = ck_data.get("yeni_roblox_ad", "—")
+    yeni_r_id = ck_data.get("yeni_roblox_id", "")
+    if ck_data.get("hesap_degisti"):
+        r_metin = (
+            f"⚠️ **Roblox Hesabı Değişti**\n"
+            f"• **Eski:** [{eski_r_ad}]({_profil_link(eski_r_id)}) (`{eski_r_id}`)\n"
+            f"• **Yeni:** [{yeni_r_ad}]({_profil_link(yeni_r_id)}) (`{yeni_r_id}`)\n"
+            f"• **Grup Durumu:** ✅ Yeni hesap gruba bağlandı"
+        )
+    else:
+        r_metin = (
+            f"✅ **Aynı Roblox Hesabı**\n"
+            f"• **Hesap:** [{yeni_r_ad}]({_profil_link(yeni_r_id)}) (`{yeni_r_id}`)"
+        )
+    embed.add_field(name="🎮 Roblox Durumu", value=r_metin, inline=True)
+
+    # 5. CK Sebebi
+    sebep = ck_data.get("sebep", "Belirtilmedi")
+    embed.add_field(name="💀 CK (Rolsel Karakter Yenileme) Gerekçesi", value=f"```{sebep[:950]}```", inline=False)
+
+    # 6. Yetkili & Onay Detayları
+    yetkili_str = yetkili.mention if yetkili else (f"<@{ck_data.get('onaylayan_id')}>" if ck_data.get("onaylayan_id") else "Bilinmiyor")
+    onay_ts = _ts(ck_data.get("onay_tarihi") or _simdi())
+    embed.add_field(
+        name="🛡️ İşlem & Onay Bilgileri",
+        value=f"• **Onaylayan Yetkili:** {yetkili_str}\n• **Onay Tarihi:** {onay_ts}\n• **Güncel Sunucu İsmi:** `{uye.nick or uye.display_name}`",
+        inline=False,
+    )
+
+    avatar = ck_data.get("yeni_roblox_avatar") or kayit.get("roblox_avatar") or uye.display_avatar.url
+    if avatar:
+        embed.set_thumbnail(url=avatar)
+    embed.set_footer(text=f"Belge No: CK-{uye.id}-{_simdi()} • Discord ID: {uye.id}")
+    embed.timestamp = discord.utils.utcnow()
+
+    try:
+        await kanal.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
+    except Exception as e:
+        print(f"[CK] Detaylı CK dosyası gönderilemedi: {e}", flush=True)
+
+
+class CKModal(discord.ui.Modal, title="💀 PRP | CK Başvuru Formu"):
+    def __init__(self, mevcut_roblox_ad: str = ""):
+        super().__init__(timeout=600)
+        self.yeni_karakter_ad = discord.ui.TextInput(
+            label="Yeni Karakterinizin Adı ve Soyadı",
+            placeholder="Yabancı isim, ünlü ismi olmamalı. Örn: John Carter",
+            min_length=3,
+            max_length=28,
+            required=True,
+        )
+        self.yeni_karakter_yas = discord.ui.TextInput(
+            label="Yeni Karakterinizin Yaşı",
+            placeholder="18 veya üzeri olmalı. Örn: 24",
+            min_length=1,
+            max_length=3,
+            required=True,
+        )
+        self.roblox_hesap = discord.ui.TextInput(
+            label="Roblox Profil Linki veya Kullanıcı Adı",
+            placeholder="Aynı kalacaksa mevcut adınız, değişecekse yeni hesap",
+            default=mevcut_roblox_ad,
+            max_length=200,
+            required=True,
+        )
+        self.ck_sebep = discord.ui.TextInput(
+            label="CK Atma (Karakter Değişimi) Sebebi",
+            style=discord.TextStyle.paragraph,
+            placeholder="Rolsel ölüm detayları, yeni karakter hikayesi ve sebebi açıklayınız...",
+            min_length=10,
+            max_length=600,
+            required=True,
+        )
+        self.add_item(self.yeni_karakter_ad)
+        self.add_item(self.yeni_karakter_yas)
+        self.add_item(self.roblox_hesap)
+        self.add_item(self.ck_sebep)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        ad = re.sub(r"\s+", " ", self.yeni_karakter_ad.value).strip()
+        yas = self.yeni_karakter_yas.value.strip()
+        if not yas.isdigit() or not (18 <= int(yas) <= 120):
+            return await interaction.response.send_message("❌ Karakter yaşı en az **18** ve geçerli bir sayı olmalıdır.", ephemeral=True)
+
+        kullanildi, _ = karakter_adi_kullanildi_mi(interaction.guild, ad, interaction.user.id)
+        if kullanildi:
+            return await interaction.response.send_message(
+                f"❌ **{ad}** karakter adı sunucumuzda daha önce kullanılmış veya şu an aktif bir üyeye ait.\n"
+                "Sunucumuzda her karakter adı benzersiz olmalıdır. Lütfen başka bir karakter adı seçiniz.",
+                ephemeral=True,
+            )
+
+        uye = interaction.user
+        uid = uye.id
+        kayit = kayit_al(uid)
+
+        eski_kr = ""
+        if kayit and kayit.get("karakter", {}).get("ad"):
+            eski_kr = kayit["karakter"]["ad"]
+        elif "|" in uye.display_name:
+            eski_kr = uye.display_name.split("|")[0].strip()
+        else:
+            eski_kr = uye.display_name
+
+        if ad.lower() == eski_kr.lower():
+            return await interaction.response.send_message(
+                f"❌ Yeni karakter adı eski karakterinizle (**{eski_kr}**) aynı olamaz! Karakter yenilemek için farklı bir isim seçmelisiniz.",
+                ephemeral=True,
+            )
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        guild = interaction.guild
+        ck_onay_kanal = guild.get_channel(CK_ONAY_KANAL_ID)
+        if ck_onay_kanal is None:
+            return await interaction.followup.send("❌ CK onay kanalı bulunamadı, lütfen yöneticilere haber veriniz.", ephemeral=True)
+
+        girdi = self.roblox_hesap.value.strip()
+        profil = await roblox_profil_getir(girdi)
+        if not profil:
+            return await interaction.followup.send(f"❌ Belirttiğiniz Roblox hesabı (`{girdi[:100]}`) bulunamadı.", ephemeral=True)
+        if profil["is_banned"]:
+            return await interaction.followup.send(f"❌ Belirttiğiniz Roblox hesabı (**{profil['name']}**) yasaklıdır (banned).", ephemeral=True)
+
+        rid = profil["id"]
+        mevcut_rid = str(kayit.get("roblox_id") or "") if kayit else ""
+        hesap_degisti = bool(mevcut_rid and rid != mevcut_rid)
+
+        if hesap_degisti:
+            sahip = _veri()["roblox_index"].get(rid)
+            if sahip and sahip != str(uid):
+                sahip_kayit = kayit_al(int(sahip))
+                if sahip_kayit and sahip_kayit.get("asama") not in ("reddedildi", "ayrildi"):
+                    return await interaction.followup.send(
+                        f"❌ Belirttiğiniz yeni Roblox hesabı (**{profil['name']}**) sunucumuzda zaten başka bir kullanıcıya (<@{sahip}>) bağlıdır.",
+                        ephemeral=True,
+                    )
+
+        async with _kilit(uid):
+            ck_data = {
+                "discord_id": uid,
+                "eski_karakter": eski_kr,
+                "yeni_karakter": ad,
+                "yeni_yas": int(yas),
+                "eski_roblox_id": mevcut_rid or rid,
+                "eski_roblox_ad": kayit.get("roblox_ad") if kayit else (uye.display_name.split("|")[-1].strip() if "|" in uye.display_name else profil["name"]),
+                "yeni_roblox_id": rid,
+                "yeni_roblox_ad": profil["name"],
+                "yeni_roblox_avatar": profil["avatar"],
+                "hesap_degisti": hesap_degisti,
+                "sebep": self.ck_sebep.value.strip(),
+                "tarih": _simdi(),
+                "durum": "onay_bekliyor",
+                "onaylayan_id": None,
+                "onay_tarihi": None,
+                "kart_mesaj_id": None,
+            }
+            _veri()["ck_basvurulari"][str(uid)] = ck_data
+
+            embed = discord.Embed(title="💀 Yeni CK (Karakter Değişimi) Başvurusu", colour=discord.Colour(0x9B59B6))
+            embed.add_field(name="Discord Kullanıcı", value=f"{uye.mention} (`{uid}`)", inline=False)
+            embed.add_field(name="Mevcut Sunucu İsmi", value=f"`{uye.display_name}`", inline=True)
+            embed.add_field(name="Eski Karakter", value=f"**{eski_kr}**", inline=True)
+            embed.add_field(name="🎭 Yeni Karakter & Yaş", value=f"**{ad}** ({yas})", inline=False)
+            if hesap_degisti:
+                embed.add_field(
+                    name="🎮 Roblox Hesabı",
+                    value=(f"⚠️ **HESAP DEĞİŞECEK!**\n"
+                           f"• Eski: [{ck_data['eski_roblox_ad']}]({_profil_link(ck_data['eski_roblox_id'])}) (`{ck_data['eski_roblox_id']}`)\n"
+                           f"• Yeni: [{profil['name']}]({_profil_link(rid)}) (`{rid}`)"),
+                    inline=False,
+                )
+            else:
+                embed.add_field(
+                    name="🎮 Roblox Hesabı",
+                    value=f"✅ **Aynı Hesap:** [{profil['name']}]({_profil_link(rid)}) (`{rid}`)",
+                    inline=False,
+                )
+            gercek = kayit.get("gercek_ad", "Eski sistem kaydı — bilgi yok") if kayit else "Eski sistem kaydı — bilgi yok"
+            embed.add_field(name="📝 1. Anket Bilgisi", value=f"**Gerçek Ad:** {gercek}", inline=True)
+            onizleme = _nick_olustur(ad, profil["name"])
+            embed.add_field(name="🏷️ Yeni İsim Önizleme", value=f"`{onizleme}`", inline=True)
+            embed.add_field(name="💀 CK / Değişim Sebebi", value=f"```{self.ck_sebep.value.strip()[:900]}```", inline=False)
+            if profil.get("avatar"):
+                embed.set_thumbnail(url=profil["avatar"])
+            embed.set_footer(text=f"Başvuran ID: {uid}")
+            embed.timestamp = discord.utils.utcnow()
+
+            kart = await ck_onay_kanal.send(
+                content=f"<@&{WHITELIST_YETKILISI_ROL_ID}>",
+                embed=embed,
+                view=ck_karar_view(uid),
+            )
+            ck_data["kart_mesaj_id"] = kart.id
+            await _kaydet()
+
+        await interaction.followup.send("✅ CK başvurunuz yetkililere iletildi! Başvurunuz sonuçlandığında DM kutunuza bilgilendirme gelecektir.", ephemeral=True)
+
+
+async def ck_basvur_tiklandi(interaction: discord.Interaction):
+    uye = interaction.user
+    uid = uye.id
+    if UYE_ROL_ID not in [r.id for r in uye.roles]:
+        return await interaction.response.send_message("❌ CK başvurusu yapabilmek için sunucumuzda kayıtlı bir **Üye** olmalısınız.", ephemeral=True)
+
+    ck_data = _veri()["ck_basvurulari"].get(str(uid))
+    if ck_data and ck_data.get("durum") in ("onay_bekliyor", "grup_bekliyor"):
+        if ck_data.get("durum") == "grup_bekliyor":
+            return await interaction.response.send_message("⏳ CK başvurunuz onaylandı! Yeni hesabınızla gruba katılma isteği attıktan sonra paneldeki **'Yeni Hesabımı Onayla'** butonuna basınız.", ephemeral=True)
+        return await interaction.response.send_message("⏳ Yetkililer tarafından incelenmekte olan aktif bir CK başvurunuz bulunuyor.", ephemeral=True)
+
+    kayit = kayit_al(uid)
+    son_ck = kayit.get("son_ck_tarihi") if kayit else None
+    if not son_ck:
+        gecmis = _veri()["ck_gecmisi"].get(str(uid), [])
+        if gecmis:
+            son_ck = gecmis[-1].get("onay_tarihi") or gecmis[-1].get("tarih")
+    if son_ck:
+        fark = _simdi() - son_ck
+        if fark < CK_COOLDOWN_SANIYE:
+            kalan_saniye = CK_COOLDOWN_SANIYE - fark
+            kalan_saat = kalan_saniye // 3600
+            kalan_dakika = (kalan_saniye % 3600) // 60
+            return await interaction.response.send_message(
+                f"⏳ Son CK işleminizin üzerinden 3 gün geçmeden yeni başvuru yapamazsınız.\nKalan bekleme süresi: **{kalan_saat} saat {kalan_dakika} dakika**.",
+                ephemeral=True,
+            )
+
+    mevcut_roblox = kayit.get("roblox_ad") if kayit else ""
+    if not mevcut_roblox and "|" in uye.display_name:
+        mevcut_roblox = uye.display_name.split("|")[-1].strip()
+
+    await interaction.response.send_modal(CKModal(mevcut_roblox_ad=mevcut_roblox))
+
+
+async def ck_yeni_hesap_onayla_tiklandi(interaction: discord.Interaction):
+    uye = interaction.user
+    uid = uye.id
+    ck_data = _veri()["ck_basvurulari"].get(str(uid))
+    if not ck_data or ck_data.get("durum") != "grup_bekliyor":
+        return await interaction.response.send_message("ℹ️ Grup doğrulaması bekleyen aktif bir CK başvurunuz bulunmuyor. Yeni bir karakter oluşturmak istiyorsanız önce **CK Başvur** butonuna basınız.", ephemeral=True)
+
+    kalan = HESAP_ONAY_COOLDOWN - (time.monotonic() - _ONAY_COOLDOWN.get(uid, 0))
+    if kalan > 0:
+        return await interaction.response.send_message(f"⏳ Lütfen **{int(kalan) + 1} saniye** sonra tekrar deneyiniz.", ephemeral=True)
+
+    _ONAY_COOLDOWN[uid] = time.monotonic()
+    await interaction.response.defer(ephemeral=True, thinking=True)
+
+    rid = str(ck_data["yeni_roblox_id"])
+    profil = await roblox_profil_getir(rid)
+    if not profil:
+        _ONAY_COOLDOWN.pop(uid, None)
+        return await interaction.followup.send("⚠️ Roblox profiline şu anda ulaşılamıyor. Lütfen biraz sonra tekrar deneyin.", ephemeral=True)
+    if profil["is_banned"]:
+        return await interaction.followup.send("⛔ Yeni Roblox hesabınız yasaklı görünüyor. Lütfen yetkililerle iletişime geçin.", ephemeral=True)
+
+    rutbe = await roblox_grup_rutbesi(rid)
+    if rutbe:
+        yontem = "zaten_uye"
+    else:
+        durum, path = await roblox_katilma_istegi_bul(rid)
+        if durum == "yok":
+            v = discord.ui.View()
+            v.add_item(discord.ui.Button(label="Roblox Grubumuz", emoji="🔗", style=discord.ButtonStyle.link, url=ROBLOX_GRUP_LINK))
+            return await interaction.followup.send(
+                embed=_grup_bulunamadi_embed({"roblox_ad": ck_data["yeni_roblox_ad"], "roblox_id": rid, "roblox_avatar": ck_data.get("yeni_roblox_avatar")}),
+                view=v,
+                ephemeral=True,
+            )
+        if durum != "var":
+            _ONAY_COOLDOWN.pop(uid, None)
+            return await interaction.followup.send("⚠️ Şu anda grup isteklerini kontrol edemiyoruz. Lütfen biraz sonra tekrar deneyiniz.", ephemeral=True)
+        kabul = await roblox_istegi_kabul_et(path)
+        yontem = "istek_kabul" if kabul else "istek_bulundu"
+        if kabul:
+            rutbe = await roblox_grup_rutbesi(rid) or "Member"
+
+    async with _kilit(uid):
+        # Eski Roblox bağlantısını bırak, yenisini bağla
+        eski_rid = str(ck_data.get("eski_roblox_id") or "")
+        if eski_rid and _veri()["roblox_index"].get(eski_rid) == str(uid):
+            _veri()["roblox_index"].pop(eski_rid, None)
+        _veri()["roblox_index"][rid] = str(uid)
+
+        karakter_adi_kaydet(ck_data["yeni_karakter"], uid)
+
+        yeni_nick = _nick_olustur(ck_data["yeni_karakter"], profil["name"])
+        try:
+            await uye.edit(nick=yeni_nick, reason="CK tamamlandı (Yeni Roblox hesabı bağlandı)")
+        except Exception:
+            pass
+
+        kayit = kayit_al(uid)
+        if not kayit:
+            kayit = {
+                "discord_id": uid,
+                "discord_ad": str(uye),
+                "discord_olusturma": int(uye.created_at.timestamp()),
+                "sunucu_katilim": int(uye.joined_at.timestamp()) if getattr(uye, "joined_at", None) else None,
+                "gercek_ad": "Eski sistem kaydı — bilgi yok",
+                "cinsiyet": "Belirtilmedi",
+                "asama": "tamamlandi",
+                "dosya_mesaj_id": None,
+            }
+            _veri()["kullanicilar"][str(uid)] = kayit
+
+        kayit.update({
+            "roblox_id": rid,
+            "roblox_ad": profil["name"],
+            "roblox_gorunen_ad": profil["display_name"],
+            "roblox_avatar": profil["avatar"],
+            "karakter": {"ad": ck_data["yeni_karakter"], "yas": ck_data["yeni_yas"], "tarih": _simdi()},
+            "son_ck_tarihi": _simdi(),
+            "asama": "tamamlandi",
+        })
+
+        ck_data["durum"] = "tamamlandi"
+        ck_data["grup_dogrulama"] = {"yontem": yontem, "rutbe": rutbe, "tarih": _simdi()}
+        _veri()["ck_gecmisi"].setdefault(str(uid), []).append(ck_data)
+        await _kaydet()
+
+    yetkili = await _uye_getir(interaction.guild, ck_data.get("onaylayan_id"))
+    await ck_dosyasi_gonder(interaction.client, uye, kayit, ck_data, yetkili)
+
+    embed = discord.Embed(
+        title="🎉 Yeni Hesabınız Onaylandı & CK Tamamlandı!",
+        description=(
+            f"Tebrikler {uye.mention}! Yeni Roblox hesabınız (**{profil['name']}**) grubumuzda doğrulandı "
+            + ("ve katılma isteğiniz **otomatik kabul edildi!** 🎉\n\n" if yontem == "istek_kabul" else "! 🎉\n\n")
+            + f"• **Yeni Karakteriniz:** {ck_data['yeni_karakter']} ({ck_data['yeni_yas']})\n"
+            + f"• **Sunucu İsminiz:** `{yeni_nick}`\n\n"
+            + "Yeni karakterinizle keyifli ve kaliteli roller dileriz! 🚓✨"
+        ),
+        colour=discord.Colour.green(),
+    )
+    if profil.get("avatar"):
+        embed.set_thumbnail(url=profil["avatar"])
+    await interaction.followup.send(embed=embed, ephemeral=True)
+
+
+class CKKararButonu(discord.ui.DynamicItem[discord.ui.Button], template=r"ck_(?P<islem>onayla|reddet)_(?P<uid>\d+)"):
+    def __init__(self, islem: str, uid: int):
+        onay = islem == "onayla"
+        super().__init__(
+            discord.ui.Button(
+                label="CK'YI ONAYLA" if onay else "REDDET",
+                emoji="✅" if onay else "✖️",
+                style=discord.ButtonStyle.green if onay else discord.ButtonStyle.red,
+                custom_id=f"ck_{islem}_{uid}",
+            )
+        )
+        self.islem = islem
+        self.uid = uid
+
+    @classmethod
+    async def from_custom_id(cls, interaction: discord.Interaction, item: discord.ui.Button, match: re.Match[str], /):
+        return cls(match["islem"], int(match["uid"]))
+
+    async def callback(self, interaction: discord.Interaction):
+        if not yetkili_mi(interaction.user):
+            return await interaction.response.send_message("❌ Bu işlemi yapma yetkiniz yok.", ephemeral=True)
+        ck_data = _veri()["ck_basvurulari"].get(str(self.uid))
+        if not ck_data or ck_data.get("durum") != "onay_bekliyor":
+            return await interaction.response.send_message("ℹ️ Bu CK başvurusu zaten işlenmiş.", ephemeral=True)
+        if self.islem == "reddet":
+            return await interaction.response.send_modal(CKRedModal(self.uid, interaction.message))
+        await ck_onayla(interaction, self.uid)
+
+
+def ck_karar_view(uid: int) -> discord.ui.View:
+    v = discord.ui.View(timeout=None)
+    v.add_item(CKKararButonu("onayla", uid))
+    v.add_item(CKKararButonu("reddet", uid))
+    return v
+
+
+async def ck_onayla(interaction: discord.Interaction, uid: int):
+    await interaction.response.defer(ephemeral=True, thinking=True)
+    guild = interaction.guild
+    uye = await _uye_getir(guild, uid)
+    if uye is None:
+        await _kart_kapat(interaction.message, "⚫ Kullanıcı sunucudan ayrılmış.", discord.Colour.dark_grey())
+        return await interaction.followup.send("❌ Kullanıcı sunucuda bulunamadı.", ephemeral=True)
+
+    async with _kilit(uid):
+        ck_data = _veri()["ck_basvurulari"].get(str(uid))
+        if not ck_data or ck_data.get("durum") != "onay_bekliyor":
+            return await interaction.followup.send("ℹ️ Bu CK başvurusu zaten işlenmiş.", ephemeral=True)
+
+        kayit = kayit_al(uid)
+        if not kayit:
+            kayit = {
+                "discord_id": uid,
+                "discord_ad": str(uye),
+                "discord_olusturma": int(uye.created_at.timestamp()),
+                "sunucu_katilim": int(uye.joined_at.timestamp()) if getattr(uye, "joined_at", None) else None,
+                "gercek_ad": "Eski sistem kaydı — bilgi yok",
+                "cinsiyet": "Belirtilmedi",
+                "roblox_id": ck_data["yeni_roblox_id"],
+                "roblox_ad": ck_data["yeni_roblox_ad"],
+                "roblox_avatar": ck_data.get("yeni_roblox_avatar"),
+                "asama": "tamamlandi",
+                "dosya_mesaj_id": None,
+            }
+            _veri()["kullanicilar"][str(uid)] = kayit
+
+        if not ck_data.get("hesap_degisti"):
+            # A) Aynı Roblox hesabı: Karakter adı kaydedilir, isim hemen güncellenir
+            karakter_adi_kaydet(ck_data["yeni_karakter"], uid)
+            yeni_nick = _nick_olustur(ck_data["yeni_karakter"], ck_data["yeni_roblox_ad"])
+            try:
+                await uye.edit(nick=yeni_nick, reason=f"CK onaylandı ({interaction.user})")
+            except Exception:
+                pass
+
+            kayit["karakter"] = {"ad": ck_data["yeni_karakter"], "yas": ck_data["yeni_yas"], "tarih": _simdi()}
+            kayit["son_ck_tarihi"] = _simdi()
+            ck_data["durum"] = "tamamlandi"
+            ck_data["onaylayan_id"] = interaction.user.id
+            ck_data["onay_tarihi"] = _simdi()
+            _veri()["ck_gecmisi"].setdefault(str(uid), []).append(ck_data)
+            await _kaydet()
+
+            if uye:
+                await _dm(
+                    uye,
+                    embed=discord.Embed(
+                        title="🎉 CK Başvurunuz Onaylandı!",
+                        description=(
+                            f"Merhaba {uye.mention},\n\n"
+                            f"**{guild.name}** sunucusundaki CK başvurunuz **onaylanmıştır!** 🥳\n\n"
+                            f"• **Yeni Karakteriniz:** {ck_data['yeni_karakter']} ({ck_data['yeni_yas']})\n"
+                            f"• **Sunucu İçi İsminiz:** `{yeni_nick}`\n"
+                            f"• **Roblox Hesabınız:** `{ck_data['yeni_roblox_ad']}`\n\n"
+                            "Yeni karakterinizle keyifli ve kaliteli roller dileriz! 🚓✨"
+                        ),
+                        colour=discord.Colour.green(),
+                    ).set_footer(text=f"Onaylayan Yetkili: {interaction.user.display_name}")
+                )
+
+            await ck_dosyasi_gonder(interaction.client, uye, kayit, ck_data, interaction.user)
+            await _kart_kapat(interaction.message, f"✅ **CK Onaylandı** — {interaction.user.mention}\n🏷️ `{yeni_nick}`", discord.Colour.green())
+            await interaction.followup.send(f"✅ {uye.mention} CK başvurusu onaylandı. Sunucu takma adı güncellendi: `{yeni_nick}`", ephemeral=True)
+        else:
+            # B) Yeni Roblox hesabı: Ön onay verilir, grup katılımı beklenir
+            ck_data["durum"] = "grup_bekliyor"
+            ck_data["onaylayan_id"] = interaction.user.id
+            ck_data["onay_tarihi"] = _simdi()
+            await _kaydet()
+
+            if uye:
+                await _dm(
+                    uye,
+                    embed=discord.Embed(
+                        title="🟡 CK Başvurunuz Ön Onay Aldı!",
+                        description=(
+                            f"Merhaba {uye.mention},\n\n"
+                            f"**{ck_data['yeni_karakter']}** karakteri için yaptığınız CK başvurusu yetkililer tarafından **kabul edildi!** 🎉\n\n"
+                            f"Yeni Roblox hesabınız (**{ck_data['yeni_roblox_ad']}**) için son bir adım kaldı:\n"
+                            f"1. [Roblox Grubumuza]({ROBLOX_GRUP_LINK}) yeni hesabınızla katılma isteği gönderin.\n"
+                            f"2. <#{CK_PANEL_KANAL_ID}> kanalındaki **'Yeni Hesabımı Onayla'** butonuna basınız.\n\n"
+                            "İsteğiniz doğrulandığında yeni sunucu isminiz otomatik tanımlanacaktır."
+                        ),
+                        colour=discord.Colour.gold(),
+                    ).set_footer(text=f"Onaylayan Yetkili: {interaction.user.display_name}")
+                )
+
+            await _kart_kapat(
+                interaction.message,
+                f"🟡 **CK Karakteri Onaylandı (Grup Bekleniyor)** — {interaction.user.mention}\nKullanıcının yeni Roblox hesabıyla gruba katılıp paneldeki **Yeni Hesabımı Onayla** butonuna basması bekleniyor.",
+                discord.Colour.gold(),
+            )
+            await interaction.followup.send(f"✅ {uye.mention} CK başvurusu onaylandı. Kullanıcı gruba katılıp 'Yeni Hesabımı Onayla' butonuna bastığında süreç tamamlanacak.", ephemeral=True)
+
+
+class CKRedModal(discord.ui.Modal, title="❌ CK Başvurusunu Reddet"):
+    sebep = discord.ui.TextInput(
+        label="Reddetme Sebebi",
+        style=discord.TextStyle.paragraph,
+        placeholder="Örn: Karakter adı uygunsuz / CK hikayesi yetersiz...",
+        max_length=400,
+        required=True,
+    )
+
+    def __init__(self, hedef_id: int, orijinal_mesaj: discord.Message):
+        super().__init__()
+        self.hedef_id = hedef_id
+        self.orijinal_mesaj = orijinal_mesaj
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        guild = interaction.guild
+        uye = await _uye_getir(guild, self.hedef_id)
+        sebep = self.sebep.value.strip()
+
+        async with _kilit(self.hedef_id):
+            ck_data = _veri()["ck_basvurulari"].get(str(self.hedef_id))
+            if not ck_data or ck_data.get("durum") != "onay_bekliyor":
+                return await interaction.followup.send("ℹ️ Bu CK başvurusu zaten işlenmiş.", ephemeral=True)
+
+            ck_data["durum"] = "reddedildi"
+            ck_data["red_sebebi"] = sebep
+            ck_data["reddeden_id"] = interaction.user.id
+            ck_data["red_tarihi"] = _simdi()
+            _veri()["ck_gecmisi"].setdefault(str(self.hedef_id), []).append(ck_data)
+            await _kaydet()
+
+        if uye:
+            await _dm(
+                uye,
+                embed=discord.Embed(
+                    title="❌ CK Başvurunuz Reddedildi",
+                    description=(
+                        f"Merhaba {uye.mention},\n\n"
+                        f"**{guild.name}** sunucusundaki **{ck_data.get('yeni_karakter')}** karakteri için yaptığınız CK başvurusu yetkililer tarafından reddedildi.\n\n"
+                        f"**📌 Reddetme Gerekçesi:**\n```{sebep}```\n"
+                        "Gerekçeyi inceleyip eksikleri düzelterek tekrar başvurabilirsiniz."
+                    ),
+                    colour=discord.Colour.red(),
+                ).set_footer(text=f"İnceleyen Yetkili: {interaction.user.display_name}")
+            )
+
+        await _kart_kapat(self.orijinal_mesaj, f"❌ **CK Reddedildi** — {interaction.user.mention}\n**Sebep:** {sebep}", discord.Colour.red())
+        await interaction.followup.send(f"✅ {uye.mention if uye else self.hedef_id} kullanıcısının CK başvurusu reddedildi.", ephemeral=True)
+
+
+class CKPanelView(discord.ui.LayoutView):
+    """PRP | CK Başvurusu Paneli (Components V2 LayoutView)."""
+
+    def __init__(self):
+        super().__init__(timeout=None)
+        ck_btn = discord.ui.Button(label="CK Başvur", emoji="💀", style=discord.ButtonStyle.primary, custom_id="ck_basvur_buton")
+        ck_btn.callback = ck_basvur_tiklandi
+
+        onay_btn = discord.ui.Button(label="Yeni Hesabımı Onayla", emoji="✅", style=discord.ButtonStyle.success, custom_id="ck_yeni_hesap_onayla")
+        onay_btn.callback = ck_yeni_hesap_onayla_tiklandi
+
+        grup_btn = discord.ui.Button(label="Roblox Grubumuz", emoji="🔗", style=discord.ButtonStyle.link, url=ROBLOX_GRUP_LINK)
+
+        ayrac = lambda: discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.large)
+
+        c = discord.ui.Container(accent_colour=discord.Colour(0x9B59B6))
+        c.add_item(discord.ui.TextDisplay(
+            "# 💀 PRP | CK Başvurusu\n"
+            "**Piyade RP | Los Angeles** sunucumuzda rol gereği karakterinizin hikayesi sona erdiğinde "
+            "(CK - Character Kill) veya yeni bir karaktere geçiş yapmak istediğinizde bu panel üzerinden başvurunuzu gerçekleştirebilirsiniz.\n\n"
+            "Aşağıdaki iki farklı geçiş seçeneğini inceleyerek size uygun adımlarla ilerleyiniz:"
+        ))
+        c.add_item(ayrac())
+        c.add_item(discord.ui.TextDisplay(
+            "## 🎭 1. Seçenek: Aynı Roblox Hesabı ile İsim Değişimi\n"
+            "Eğer katılımcı rolsel olarak öldüyse ve mevcut Roblox hesabını değiştirmeden yalnızca karakter adını değiştirmek istiyorsa:\n"
+            "• **Karakter Adı:** Karakteriniz için yeni bir yabancı isim ve soyad belirleyiniz *(Örn: John Carter)*.\n"
+            "• **Yaş Kuralı:** Karakteriniz en az **18 yaşında** olmalıdır.\n"
+            "• **İsim Tekilliği:** Sunucuda daha önce kullanılmış veya eski karakter adınız seçilemez (Otomatik kontrol edilir).\n"
+            "• **Roblox Alanı:** Formdaki Roblox kısmına mevcut Roblox kullanıcı adınızı aynen yazınız.\n"
+            "• **Sonuç:** Yetkili onayının ardından takma adınız `{Yeni Karakter} | {Roblox}` olarak güncellenir."
+        ))
+        c.add_item(ayrac())
+        c.add_item(discord.ui.TextDisplay(
+            "## 🔄 2. Seçenek: Roblox Hesabı ve Karakter Değişimi\n"
+            "Eğer katılımcı rol yapacağı Roblox hesabını da değiştirecekse:\n"
+            "• **Kullanıcı Adı Zorunluluğu:** Roblox profilini değiştiren üyeler karakter adını da değiştirmek zorundadır.\n"
+            "• **Formu Doldurma:** Aşağıdaki **💀 CK Başvur** butonuna basıp yeni karakter adını ve **yeni Roblox profil linkini** yazınız.\n"
+            "• **İsim Tekilliği:** Kullanıcı önceden kullandığı karakter adını bir daha kullanamaz (Otomatik kontrol edilir).\n"
+            "• **Yetkili Onayı:** Başvuru incelenip yetkili ekibi tarafından ön onay verilir.\n"
+            "• **Gruba Katılma & Doğrulama:** Ön onay sonrası **[Roblox Grubumuza]({ROBLOX_GRUP_LINK})** yeni hesabınızla istek gönderiniz ve ardından bu paneldeki **✅ Yeni Hesabımı Onayla** butonuna basınız!"
+        ))
+        c.add_item(ayrac())
+        c.add_item(discord.ui.TextDisplay(
+            "## 📜 Önemli Kurallar & Maddeler\n"
+            "• **3 Günlük Cooldown:** Onaylanan bir CK işleminden sonra tekrar başvuru yapabilmek için **3 gün** beklemeniz gerekir.\n"
+            "• **Geçmiş Arşivi:** İlk kayıt bilgileriniz (1. Anket gerçek adınız) sunucu dosyalarımızda kalıcı olarak saklanır.\n"
+            "• **Troll İsim Yasağı:** Ünlü, kurgusal ya da troll isimlerle yapılan başvurular reddedilir."
+        ))
+        c.add_item(ayrac())
+        c.add_item(discord.ui.MediaGallery(discord.MediaGalleryItem("attachment://ck_panel_banner.jpg")))
+        c.add_item(discord.ui.ActionRow(ck_btn, onay_btn, grup_btn))
+        self.add_item(c)
+
+
+# =====================================================================
+# 5. AŞAMA — MEVCUT ÜYE ROBLOX EŞLEME SİSTEMİ
+# =====================================================================
+class MevcutUyeModal(discord.ui.Modal, title="🛡️ Mevcut Üye Roblox Eşleme"):
+    def __init__(self):
+        super().__init__(timeout=600)
+        self.roblox_girdi = discord.ui.TextInput(
+            label="Roblox Adınız veya Profil Linkiniz",
+            placeholder="Örn: Builderman, 156 veya https://www.roblox.com/users/156/profile",
+            max_length=200,
+            required=True,
+        )
+        self.add_item(self.roblox_girdi)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        uye = interaction.user
+        uid = uye.id
+
+        girdi = self.roblox_girdi.value.strip()
+        profil = await roblox_profil_getir(girdi)
+        if not profil:
+            return await interaction.followup.send(f"❌ Belirttiğiniz Roblox hesabı (`{girdi[:100]}`) bulunamadı.", ephemeral=True)
+        if profil["is_banned"]:
+            return await interaction.followup.send(f"❌ Belirttiğiniz Roblox hesabı (**{profil['name']}**) yasaklıdır (banned).", ephemeral=True)
+
+        rid = profil["id"]
+        sahip = _veri()["roblox_index"].get(rid)
+        if sahip and sahip != str(uid):
+            sahip_kayit = kayit_al(int(sahip))
+            if sahip_kayit and sahip_kayit.get("asama") not in ("reddedildi", "ayrildi"):
+                return await interaction.followup.send(
+                    f"❌ Belirttiğiniz Roblox hesabı (**{profil['name']}**) sunucumuzda başka bir üyeye (<@{sahip}>) bağlıdır.",
+                    ephemeral=True,
+                )
+
+        rutbe = await roblox_grup_rutbesi(rid)
+        if rutbe:
+            yontem = "zaten_uye"
+        else:
+            durum, path = await roblox_katilma_istegi_bul(rid)
+            if durum == "yok":
+                v = discord.ui.View()
+                v.add_item(discord.ui.Button(label="Roblox Grubumuz", emoji="🔗", style=discord.ButtonStyle.link, url=ROBLOX_GRUP_LINK))
+                return await interaction.followup.send(
+                    embed=_grup_bulunamadi_embed({"roblox_ad": profil["name"], "roblox_id": rid, "roblox_avatar": profil.get("avatar")}),
+                    view=v,
+                    ephemeral=True,
+                )
+            if durum != "var":
+                return await interaction.followup.send("⚠️ Şu anda grup isteklerini kontrol edemiyoruz. Yetkililer bilgilendirildi, lütfen biraz sonra tekrar deneyiniz.", ephemeral=True)
+            kabul = await roblox_istegi_kabul_et(path)
+            yontem = "istek_kabul" if kabul else "istek_bulundu"
+            if kabul:
+                rutbe = await roblox_grup_rutbesi(rid) or "Member"
+
+        async with _kilit(uid):
+            kayit = kayit_al(uid)
+            display = uye.display_name
+            kr_ad = display.split("|")[0].strip() if "|" in display else display
+
+            if not kayit:
+                kayit = {
+                    "discord_id": uid,
+                    "discord_ad": str(uye),
+                    "discord_olusturma": int(uye.created_at.timestamp()),
+                    "sunucu_katilim": int(uye.joined_at.timestamp()) if getattr(uye, "joined_at", None) else None,
+                    "gercek_ad": "Eski sistem kaydı — bilgi yok",
+                    "cinsiyet": "Belirtilmedi",
+                    "roblox_id": rid,
+                    "roblox_ad": profil["name"],
+                    "roblox_gorunen_ad": profil["display_name"],
+                    "roblox_olusturma": profil["created"],
+                    "roblox_banli": profil["is_banned"],
+                    "roblox_avatar": profil["avatar"],
+                    "asama": "tamamlandi",
+                    "basvuru_tarihi": _simdi(),
+                    "onceki_red_sayisi": 0,
+                    "thread_id": None,
+                    "dosya_mesaj_id": None,
+                    "karakter": {"ad": kr_ad, "yas": 20, "tarih": _simdi()},
+                    "grup_dogrulama": {"yontem": yontem, "tarih": _simdi(), "rutbe": rutbe},
+                    "final": {"yetkili_id": interaction.client.user.id, "tarih": _simdi(), "nick": uye.display_name, "roller": "Mevcut Üye Eşleme"},
+                    "mevcut_uye_esleme": True,
+                }
+                _veri()["kullanicilar"][str(uid)] = kayit
+            else:
+                kayit.update({
+                    "roblox_id": rid,
+                    "roblox_ad": profil["name"],
+                    "roblox_gorunen_ad": profil["display_name"],
+                    "roblox_avatar": profil["avatar"],
+                    "roblox_banli": profil["is_banned"],
+                    "asama": "tamamlandi",
+                    "grup_dogrulama": {"yontem": yontem, "tarih": _simdi(), "rutbe": rutbe},
+                })
+            _veri()["roblox_index"][rid] = str(uid)
+            karakter_adi_kaydet(kr_ad, uid)
+            await _kaydet()
+
+        await dosya_guncelle(interaction.client, kayit)
+
+        await interaction.followup.send(
+            f"✅ Tebrikler {uye.mention}! **{profil['name']}** Roblox hesabınız grubumuza başarıyla eşlendi "
+            + ("ve katılma isteğiniz **otomatik kabul edildi!** 🎉" if yontem == "istek_kabul" else "! 🎉")
+            + "\nRollerinize, karakterinize veya takma adınıza dokunulmadı. İyi roller dileriz! 🚓✨",
+            ephemeral=True,
+        )
+
+
+async def mevcut_uye_esle_tiklandi(interaction: discord.Interaction):
+    uye = interaction.user
+    if UYE_ROL_ID not in [r.id for r in uye.roles]:
+        return await interaction.response.send_message(
+            "❌ Bu panel yalnızca sunucumuzda halihazırda **Üye** rolü olan eski katılımcılar içindir. "
+            f"Henüz kayıt olmadıysanız lütfen <#{KAYIT_KANAL_ID}> kanalından başvurunuz.",
+            ephemeral=True,
+        )
+    await interaction.response.send_modal(MevcutUyeModal())
+
+
+class MevcutUyePanelView(discord.ui.LayoutView):
+    """PRP | Mevcut Üye Roblox Eşleme Paneli (Components V2 LayoutView)."""
+
+    def __init__(self):
+        super().__init__(timeout=None)
+        esle_btn = discord.ui.Button(label="Hesabımı Gruba Eşle", emoji="🛡️", style=discord.ButtonStyle.success, custom_id="mevcut_uye_esle_buton")
+        esle_btn.callback = mevcut_uye_esle_tiklandi
+
+        grup_btn = discord.ui.Button(label="Roblox Grubumuz", emoji="🔗", style=discord.ButtonStyle.link, url=ROBLOX_GRUP_LINK)
+
+        ayrac = lambda: discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.large)
+
+        c = discord.ui.Container(accent_colour=TEMA_RENK)
+        c.add_item(discord.ui.TextDisplay(
+            "# 🛡️ PRP | Mevcut Üye Roblox Eşleme\n"
+            "Bu panel, sunucumuzda halihazırda **Üye** rolü bulunan eski katılımcılarımızın Roblox hesaplarını "
+            "grubumuzla eşleştirmesi ve katılma isteklerinin otomatik kabul edilmesi için hazırlanmıştır."
+        ))
+        c.add_item(ayrac())
+        c.add_item(discord.ui.TextDisplay(
+            "## 📋 Nasıl Çalışır?\n"
+            f"**1.** Önce **[Piyade RP | Los Angeles]({ROBLOX_GRUP_LINK})** Roblox grubumuza katılma isteği gönderiniz.\n"
+            "**2.** Aşağıdaki **🛡️ Hesabımı Gruba Eşle** butonuna basınız.\n"
+            "**3.** Açılan forma Roblox kullanıcı adınızı veya profil linkinizi yazınız.\n"
+            "**4.** Bot isteğinizi otomatik olarak kabul eder ve üye dosyanızı sisteme işler.\n\n"
+            "-# ⚠️ Bu işlem mevcut rollerinizi, karakterinizi veya sunucu içi takma adınızı DEĞİŞTİRMEZ."
+        ))
+        c.add_item(ayrac())
+        c.add_item(discord.ui.ActionRow(esle_btn, grup_btn))
+        self.add_item(c)
+
+
+# =====================================================================
 # COG
 # =====================================================================
 class Registration(commands.Cog):
@@ -1739,6 +2577,27 @@ class Registration(commands.Cog):
         )
         uyari = "" if ROBLOX_API_KEY else "\n⚠️ `ROBLOX_API_KEY` tanımlı değil! Grup isteği kontrolü çalışmayacak."
         await interaction.followup.send(f"✅ Grup paneli gönderildi.{uyari}", ephemeral=True)
+
+    @app_commands.command(name="ck-panel-kur", description="PRP | CK Başvurusu panelini bu kanala kurar.")
+    async def ck_panel_kur(self, interaction: discord.Interaction):
+        if not discord.utils.get(interaction.user.roles, id=KURUCU_ROL_ID):
+            return await interaction.response.send_message("❌ Bu komutu sadece **Kurucu** kullanabilir!", ephemeral=True)
+        if not os.path.exists(CK_PANEL_BANNER_PATH):
+            return await interaction.response.send_message("❌ `assets/ck_panel_banner.jpg` bulunamadı.", ephemeral=True)
+        await interaction.response.defer(ephemeral=True)
+        await interaction.channel.send(
+            view=CKPanelView(),
+            file=discord.File(CK_PANEL_BANNER_PATH, filename="ck_panel_banner.jpg"),
+        )
+        await interaction.followup.send("✅ CK paneli başarıyla gönderildi.", ephemeral=True)
+
+    @app_commands.command(name="mevcut-uye-panel", description="PRP | Mevcut Üye Roblox Grup Eşleme panelini bu kanala kurar.")
+    async def mevcut_uye_panel(self, interaction: discord.Interaction):
+        if not discord.utils.get(interaction.user.roles, id=KURUCU_ROL_ID):
+            return await interaction.response.send_message("❌ Bu komutu sadece **Kurucu** kullanabilir!", ephemeral=True)
+        await interaction.response.defer(ephemeral=True)
+        await interaction.channel.send(view=MevcutUyePanelView())
+        await interaction.followup.send("✅ Mevcut üye paneli başarıyla gönderildi.", ephemeral=True)
 
     @app_commands.command(name="kayit-sifirla", description="Bir kullanıcının kayıt sürecini ve Roblox kimlik bağlantısını sıfırlar.")
     @app_commands.describe(kullanici="Kaydı sıfırlanacak kullanıcı (ID de yazılabilir)")
