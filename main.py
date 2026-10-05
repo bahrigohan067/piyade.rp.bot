@@ -31,7 +31,14 @@ class MyBot(commands.Bot):
 
         # ── Kalıcı (persistent) buton kayıtları ──
         # Bot yeniden başlasa bile eski panellerdeki butonlar çalışır.
-        from cogs.registration import KayitButonView, OnayView
+        from cogs.registration import (
+            KayitButonView,
+            GrupPanelView,
+            KarakterPanelView,
+            KayitKararButonu,
+            KarakterKararButonu,
+            OnayView,
+        )
         from cogs.tickets import TicketPanelView, CloseTicketView
         from cogs.vs_talep import VSSetupView, VSChannelView
         from cogs.uyari_sistemi import UyariPanel
@@ -44,7 +51,10 @@ class MyBot(commands.Bot):
         from cogs.mod_cagri import ModCagriView
 
         self.add_view(KayitButonView())
+        self.add_view(GrupPanelView())
+        self.add_view(KarakterPanelView())
         self.add_view(OnayView(user_id=None))
+        self.add_dynamic_items(KayitKararButonu, KarakterKararButonu)
         self.add_view(TicketPanelView())
         self.add_view(CloseTicketView())
         self.add_view(UyariPanel())
