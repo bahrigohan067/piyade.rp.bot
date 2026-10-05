@@ -76,8 +76,8 @@ class MyBot(commands.Bot):
         self.add_view(ModCagriView())
 
         # ── Akıllı Otomatik Slash Komut Senkronizasyonu ──
-        # Discord'a kayıtlı komut sayısını çekip yerel komut sayısıyla karşılaştırır.
-        # Sadece fark varsa sync yapar → Rate limit koruması (200 istek/gün).
+        # Discord'a kayıtlı komut adlarını çekip yerel komutlarla karşılaştırır.
+        # İsimlerde veya sayıda herhangi bir fark varsa sync yapar.
         try:
             guild = discord.Object(id=GUILD_ID)
             self.tree.copy_global_to(guild=guild)
@@ -85,20 +85,41 @@ class MyBot(commands.Bot):
             yerel_komutlar = self.tree.get_commands(guild=guild)
             kayitli_komutlar = await self.tree.fetch_commands(guild=guild)
 
-            if len(yerel_komutlar) != len(kayitli_komutlar):
+            yerel_adlar = {c.name for c in yerel_komutlar}
+            kayitli_adlar = {c.name for c in kayitli_komutlar}
+
+            if yerel_adlar != kayitli_adlar:
                 synced = await self.tree.sync(guild=guild)
-                print(f"[SYNC] Komut sayısı değişti ({len(kayitli_komutlar)} → {len(synced)}). Senkronize edildi.")
+                fark_eklenen = yerel_adlar - kayitli_adlar
+                fark_silinen = kayitli_adlar - yerel_adlar
+                print(f"[SYNC] Komut listesi güncellendi! Toplam: {len(synced)}. Eklenen: {fark_eklenen or 'Yok'}, Silinen: {fark_silinen or 'Yok'}", flush=True)
             else:
-                print(f"[SYNC] Komutlar güncel ({len(kayitli_komutlar)} komut). Sync atlandı.")
+                print(f"[SYNC] Komutlar güncel ({len(kayitli_adlar)} komut). Sync atlandı.", flush=True)
         except Exception as e:
-            print(f"[SYNC] Senkronizasyon hatası: {e}")
+            print(f"[SYNC] Senkronizasyon hatası: {e}", flush=True)
 
 bot = MyBot()
 
+@bot.command(name="sync")
+async def sync_komutu(ctx: commands.Context):
+    """Kurucu veya Yönetici yetkisine sahip kişilerin zorla komut senkronizasyonu yapmasını sağlar."""
+    KURUCU_ROL_ID = 1529546007635824680
+    if not (ctx.author.guild_permissions.administrator or any(r.id == KURUCU_ROL_ID for r in getattr(ctx.author, "roles", []))):
+        return await ctx.reply("❌ Bu komutu yalnızca **Kurucu** kullanabilir.")
+
+    mesaj = await ctx.reply("🔄 Slash komutları Discord'a senkronize ediliyor, lütfen bekleyiniz...")
+    try:
+        guild = discord.Object(id=GUILD_ID)
+        bot.tree.copy_global_to(guild=guild)
+        synced = await bot.tree.sync(guild=guild)
+        await mesaj.edit(content=f"✅ **{len(synced)} adet** slash komutu sunucuya başarıyla senkronize edildi! (Discord'unuzu `Ctrl + R` yaparak yenileyebilirsiniz.)")
+    except Exception as e:
+        await mesaj.edit(content=f"❌ Senkronizasyon hatası: `{e}`")
+
 @bot.event
 async def on_ready():
-    print(f"Bot basariyla giris yapti: {bot.user}")
-    print("------")
+    print(f"Bot basariyla giris yapti: {bot.user}", flush=True)
+    print("------", flush=True)
 
 @bot.tree.error
 async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
