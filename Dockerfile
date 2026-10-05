@@ -2,6 +2,8 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
+ENV PYTHONUNBUFFERED=1
+
 # Install ffmpeg
 RUN apt-get update && apt-get install -y ffmpeg
 
@@ -13,4 +15,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # Run the bot
-CMD ["python", "main.py"]
+CMD ["python", "-u", "main.py"]

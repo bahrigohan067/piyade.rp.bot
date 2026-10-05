@@ -75,26 +75,13 @@ class MyBot(commands.Bot):
         self.add_view(DestekAktifView())
         self.add_view(ModCagriView())
 
-        # ── Akıllı Otomatik Slash Komut Senkronizasyonu ──
-        # Discord'a kayıtlı komut adlarını çekip yerel komutlarla karşılaştırır.
-        # İsimlerde veya sayıda herhangi bir fark varsa sync yapar.
+        # ── Otomatik Slash Komut Senkronizasyonu ──
+        # Bot her açıldığında tüm komutları doğrudan sunucuya aktarır.
         try:
             guild = discord.Object(id=GUILD_ID)
             self.tree.copy_global_to(guild=guild)
-
-            yerel_komutlar = self.tree.get_commands(guild=guild)
-            kayitli_komutlar = await self.tree.fetch_commands(guild=guild)
-
-            yerel_adlar = {c.name for c in yerel_komutlar}
-            kayitli_adlar = {c.name for c in kayitli_komutlar}
-
-            if yerel_adlar != kayitli_adlar:
-                synced = await self.tree.sync(guild=guild)
-                fark_eklenen = yerel_adlar - kayitli_adlar
-                fark_silinen = kayitli_adlar - yerel_adlar
-                print(f"[SYNC] Komut listesi güncellendi! Toplam: {len(synced)}. Eklenen: {fark_eklenen or 'Yok'}, Silinen: {fark_silinen or 'Yok'}", flush=True)
-            else:
-                print(f"[SYNC] Komutlar güncel ({len(kayitli_adlar)} komut). Sync atlandı.", flush=True)
+            synced = await self.tree.sync(guild=guild)
+            print(f"[SYNC] {len(synced)} adet slash komutu sunucuya başarıyla senkronize edildi!", flush=True)
         except Exception as e:
             print(f"[SYNC] Senkronizasyon hatası: {e}", flush=True)
 
