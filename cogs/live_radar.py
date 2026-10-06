@@ -8,12 +8,37 @@ from utils.storage import load_json, save_json_atomic
 
 RADAR_KANAL_ID = 1553721461389266974
 RDM_LOG_KANAL_ID = 1554099605837185044
+ESK_LOG_KANAL_ID = 1557045447808520393
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(BASE_DIR, "data")
 BOLGELER_FILE = os.path.join(DATA_DIR, "bolgeler.json")
 KILLER_FILE = os.path.join(DATA_DIR, "gunluk_killer.json")
 DASHBOARD_FILE = os.path.join(DATA_DIR, "radar_dashboard.json")
+KAYIT_FILE = os.path.join(DATA_DIR, "kayit_data.json")
+ENVANTER_FILE = os.path.join(DATA_DIR, "envanter_verileri.json")
+
+def roblox_to_discord(roblox_id: str, roblox_name: str = "") -> int | None:
+    """Roblox ID veya kullanıcı adından Discord ID'sini bulur."""
+    kayit_data = load_json(KAYIT_FILE, {})
+    roblox_idx = kayit_data.get("roblox_index", {})
+    if str(roblox_id) in roblox_idx:
+        try:
+            return int(roblox_idx[str(roblox_id)])
+        except (ValueError, TypeError):
+            pass
+    for uid_str, user_data in kayit_data.get("kullanicilar", {}).items():
+        if str(user_data.get("roblox_id")) == str(roblox_id):
+            try:
+                return int(uid_str)
+            except (ValueError, TypeError):
+                pass
+        if roblox_name and str(user_data.get("roblox_ad", "")).lower() == roblox_name.lower():
+            try:
+                return int(uid_str)
+            except (ValueError, TypeError):
+                pass
+    return None
 
 # Dosya okunamasa bile Safezone kontrolünün asla aksamaması için yedek tanımlar (4 Köşe Poligon)
 TANIMLI_BOLGELER = {
@@ -332,8 +357,67 @@ class LiveRadar(commands.Cog):
                 postal = pos_info.get("postal", "-")
                 street = pos_info.get("street", "-")
                 bina = pos_info.get("building", "-")
-                silah = k.get("Weapon", "Bilinmiyor")
+                raw_silah = k.get("Weapon")
+                if raw_silah and str(raw_silah).strip().lower() not in ["none", "null", ""]:
+                    silah = str(raw_silah).strip()
+                    atesli_silah_mi = True
+                else:
+                    silah = "Bilinmiyor (Ateşli Silah Değil / Araç vb.)"
+                    atesli_silah_mi = False
 
+                # 4.A - E.S.K İhlali Denetimi (Envantersiz Silah Kullanımı)
+                if atesli_silah_mi:
+                    esk_kanal = self.bot.get_channel(ESK_LOG_KANAL_ID)
+                    if not esk_kanal:
+                        try:
+                            esk_kanal = await self.bot.fetch_channel(ESK_LOG_KANAL_ID)
+                        except Exception:
+                            esk_kanal = None
+
+                    killer_disc_id = roblox_to_discord(killer_id, killer_name)
+                    victim_disc_id = roblox_to_discord(victim_id, victim_name)
+
+                    envanter_data = load_json(ENVANTER_FILE, {})
+                    has_weapon = False
+
+                    if killer_disc_id:
+                        user_inv = envanter_data.get("users", {}).get(str(killer_disc_id), {}).get("inventory", {})
+                        for inv_item, count in user_inv.items():
+                            if count > 0:
+                                if inv_item.lower() in silah.lower() or silah.lower() in inv_item.lower():
+                                    has_weapon = True
+                                    break
+
+                    if not has_weapon:
+                        if esk_kanal:
+                            killer_mention = f"<@{killer_disc_id}>" if killer_disc_id else "*Kayıtsız / Eşleşmedi*"
+                            victim_mention = f"<@{victim_disc_id}>" if victim_disc_id else "*Kayıtsız / Eşleşmedi*"
+
+                            esk_embed = discord.Embed(
+                                title="🚨 E.S.K İHLALİ (ENVANTERSİZ SİLAH KULLANIMI)",
+                                description=(
+                                    f"**{killer_name}**, Discord envanterinde kayıtlı olmayan **`{silah}`** ile cinayet/saldırı gerçekleştirdi!\n"
+                                    "Sunucu kuralları gereği ruhsatı ve envanter kaydı bulunmayan ateşli silahların kullanımı yasaktır."
+                                ),
+                                color=discord.Color.dark_red(),
+                                timestamp=datetime.fromtimestamp(ts, tz=timezone.utc) if ts else datetime.now(tz_tr)
+                            )
+                            esk_embed.add_field(name="👤 Saldırgan (Katil)", value=f"**{killer_name}** `(ID: {killer_id})`\nDiscord: {killer_mention}", inline=True)
+                            esk_embed.add_field(name="🎯 Mağdur (Kurban)", value=f"**{victim_name}** `(ID: {victim_id})`\nDiscord: {victim_mention}", inline=True)
+                            esk_embed.add_field(name="🔫 Kullanılan Silah", value=f"`{silah}`", inline=True)
+                            esk_embed.add_field(name="🎒 Envanter Durumu", value=f"❌ Saldırganın envanterinde **`{silah}`** BULUNMUYOR!", inline=False)
+
+                            komun_str = f"📍 X: `{x_val}` | Z: `{z_val}` (Posta: `{postal}` • {street})"
+                            esk_embed.add_field(name="📍 Olay Yeri", value=komun_str, inline=False)
+                            esk_embed.set_footer(text="Piyade RP • Otomatik E.S.K Denetim Sistemi")
+
+                            try:
+                                await esk_kanal.send(embed=esk_embed)
+                                print(f"[E.S.K İHLALİ] {killer_name} -> {victim_name} ({silah}) logu iletildi.", flush=True)
+                            except Exception as e:
+                                print(f"[E.S.K HATA] Log iletilemedi: {e}", flush=True)
+
+                # 4.B - Safezone İhlali Denetimi
                 safezone = bolge_kontrol(x_val, z_val, postal, bolgeler_data)
                 if not safezone:
                     continue

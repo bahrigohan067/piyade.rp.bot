@@ -8,6 +8,9 @@ import time
 OLU_ROL_ID = 1544777693030125720
 ARANAN_ROL_ID = 1549155694714953870
 ARANANLAR_KANAL_ID = 1540128889307922452
+ILLEGAL_ROL_ID = 1539249508314259567
+
+from cogs.envanter_sistemi import get_user_profile, update_user_profile, format_usd
 
 def truncate_label(text, limit=80):
     if len(text) > limit:
@@ -342,15 +345,16 @@ class MethUretimi(commands.Cog):
             saniye = kalan_sure % 60
             return await interaction.response.send_message(f"⏳ Çok yoruldun, polisler de civarda geziyor! Yeni bir üretim yapabilmek için **{dakika} dakika {saniye} saniye** beklemelisin.", ephemeral=True)
 
+        if not any(r.id == ILLEGAL_ROL_ID for r in interaction.user.roles):
+            return await interaction.response.send_message(f"❌ Bu komutu yalnızca <@&{ILLEGAL_ROL_ID}> rolüne sahip illegal üyeler kullanabilir!", ephemeral=True)
+
         if any(r.id == OLU_ROL_ID for r in interaction.user.roles):
             return await interaction.response.send_message("💀 Ölüler/Mahkumlar işlem yapamaz!", ephemeral=True)
         
-        market_cog = self.bot.get_cog("Market")
-        if not market_cog:
-            return await interaction.response.send_message("Market sistemi aktif değil.", ephemeral=True)
-
-        if not market_cog.esya_sahibi_mi(interaction.user.id, "meth"):
-            return await interaction.response.send_message("🛢️ Bunu yapmak için önce marketten **Meth Malzemeleri** satın almalısın!", ephemeral=True)
+        user_profile = get_user_profile(interaction.user.id)
+        user_inv = user_profile.get("inventory", {})
+        if user_inv.get("Meth Malzemeleri", 0) <= 0:
+            return await interaction.response.send_message("🛢️ Madde üretebilmek için önce İllegal Market'ten **Meth Malzemeleri** satın almalısın!", ephemeral=True)
 
         # Üretime başarılı şekilde başlanıyor, süreyi başlat:
         self.cooldowns[interaction.user.id] = now
@@ -395,7 +399,9 @@ class MethUretimi(commands.Cog):
 
         if not zaman_asimi and dogru_sayisi >= 4:
             # Başarılı — ürünü şimdi tüket
-            market_cog.esya_sil(interaction.user.id, "meth", 1)
+            user_profile = get_user_profile(interaction.user.id)
+            user_inv = user_profile.get("inventory", {})
+            user_inv["Meth Malzemeleri"] = max(0, user_inv.get("Meth Malzemeleri", 1) - 1)
 
             if dogru_sayisi == 4:
                 kazanc = random.randint(300, 500)
@@ -408,10 +414,16 @@ class MethUretimi(commands.Cog):
             else:
                 kazanc = random.randint(1200, 1400)
             
-            market_cog.bakiye_ayarla(interaction.user.id, market_cog.bakiye_al(interaction.user.id) + kazanc)
+            user_profile["cash"] += kazanc
+            update_user_profile(interaction.user.id, user_profile)
             
             sonuc_embed = discord.Embed(title="✅ Üretim Tamamlandı!", color=discord.Color.green())
-            sonuc_embed.description = f"🎉 {interaction.user.mention} muhteşem bir iş çıkardın!\n\n🧪 **Skor:** {dogru_sayisi}/8\n💵 **Kazanılan:** {f'{kazanc:,}'.replace(',', '.')}₺"
+            sonuc_embed.description = (
+                f"🎉 {interaction.user.mention} muhteşem bir iş çıkardın!\n\n"
+                f"🧪 **Skor:** `{dogru_sayisi}/8`\n"
+                f"💵 **Kazanılan (Nakit Cüzdan):** **{format_usd(kazanc)}**\n"
+                f"💰 **Güncel Nakit Paran:** `{format_usd(user_profile['cash'])}`"
+            )
             
             await interaction.edit_original_response(content=None, embed=sonuc_embed, view=None)
             

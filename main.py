@@ -52,6 +52,7 @@ class MyBot(commands.Bot):
         from cogs.rp_oylama import RPOylamaView
         from cogs.yardim_bekleme import DevralView, DestekAktifView
         from cogs.mod_cagri import ModCagriView
+        from cogs.envanter_sistemi import ATMView, MarketView, GunshopView, IllegalMarketView
 
         self.add_view(KayitButonView())
         self.add_view(GrupPanelView())
@@ -74,6 +75,10 @@ class MyBot(commands.Bot):
         self.add_view(DevralView())
         self.add_view(DestekAktifView())
         self.add_view(ModCagriView())
+        self.add_view(ATMView())
+        self.add_view(MarketView())
+        self.add_view(GunshopView())
+        self.add_view(IllegalMarketView())
 
         # ── Otomatik Slash Komut Senkronizasyonu ──
         # Bot her açıldığında tüm komutları doğrudan sunucuya aktarır.
