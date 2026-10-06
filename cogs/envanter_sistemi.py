@@ -402,14 +402,14 @@ class GunshopAdetModal(discord.ui.Modal):
         await self.bot_cog.guncelle_gunshop_paneli(interaction.guild)
 
         embed = discord.Embed(
-            title="🔫 Ruhsatlı Silah Satın Alındı",
+            title="🔫 Ruhsatsız Silah Satın Alındı",
             color=discord.Color.gold(),
-            description=f"Başarıyla **{adet_val}x {self.silah_adi}** satın aldınız ve envanterinize kayıt edildi!"
+            description=f"Başarıyla **{adet_val}x {self.silah_adi}** (Ruhsatsız) satın aldınız ve envanterinize kayıt edildi!"
         )
         embed.add_field(name="💸 Toplam Tutar", value=f"`{format_usd(toplam_tutar)}` (Nakit)", inline=True)
         embed.add_field(name="💵 Kalan Nakit", value=f"`{format_usd(user['cash'])}`", inline=True)
         embed.add_field(name="📦 Kalan Mağaza Stoğu", value=f"`{stoklar[self.silah_adi]} adet`", inline=True)
-        embed.set_footer(text="Piyade RP Ammu-Nation • Yasal Silah Kaydı")
+        embed.set_footer(text="Piyade RP Ammu-Nation • Ruhsatsız Silah Kaydı")
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
 class GunshopView(discord.ui.View):
@@ -477,11 +477,13 @@ class EnvanterSistemi(commands.Cog):
         c_stok = stoklar.get("Colt 1911", 0)
 
         embed = discord.Embed(
-            title="🔫 AMMU-NATION • RESMİ SİLAH & MÜHİMMAT MAĞAZASI",
+            title="🔫 AMMU-NATION • SİLAH & MÜHİMMAT MAĞAZASI",
             description=(
-                "Los Santos yasal silah tedarik merkezine hoş geldiniz.\n"
+                "Los Santos Ammu-Nation silah mağazasına hoş geldiniz.\n"
                 "Aşağıdaki butonları kullanarak doğrudan satın alım yapabilirsiniz.\n\n"
-                "⚠️ **BİLGİLENDİRME:**\n"
+                "⚠️ **ÖNEMLİ BİLGİLENDİRME:**\n"
+                "• **Silahçıdan satın alınan tüm silahlar RUHSATSIZDIR!**\n"
+                "• Emniyet birimlerinin yapacağı üst aramasında veya denetimlerde ruhsatsız silah bulundurmak suç teşkil eder.\n"
                 "• Ödemeler doğrudan **NAKİT** cüzdanınızdan tahsil edilir.\n"
                 "• Satın aldığınız silahlar anında dijital envanterinize kaydedilir.\n"
                 "• Sunucu kuralları gereği envantersiz silah kullanımı (E.S.K) cezalandırılır.\n"
@@ -559,8 +561,8 @@ class EnvanterSistemi(commands.Cog):
         else:
             embed.description = f"**Kullanıcı:** {hedef.mention} `({hedef.id})`\n──────────────────────────────"
             embed.add_field(
-                name="🔫 Ruhsatlı / Kayıtlı Silahlar",
-                value="\n".join(silahlar) if silahlar else "*Kayıtlı silah bulunmuyor.*",
+                name="🔫 Ruhsatsız Silahlar",
+                value="\n".join(silahlar) if silahlar else "*Silah bulunmuyor.*",
                 inline=False
             )
             embed.add_field(
@@ -712,11 +714,13 @@ class EnvanterSistemi(commands.Cog):
             c_stok = stoklar.get("Colt 1911", 50)
 
             s_embed = discord.Embed(
-                title="🔫 AMMU-NATION • RESMİ SİLAH & MÜHİMMAT MAĞAZASI",
+                title="🔫 AMMU-NATION • SİLAH & MÜHİMMAT MAĞAZASI",
                 description=(
-                    "Los Santos yasal silah tedarik merkezine hoş geldiniz.\n"
+                    "Los Santos Ammu-Nation silah mağazasına hoş geldiniz.\n"
                     "Aşağıdaki butonları kullanarak doğrudan satın alım yapabilirsiniz.\n\n"
-                    "⚠️ **BİLGİLENDİRME:**\n"
+                    "⚠️ **ÖNEMLİ BİLGİLENDİRME:**\n"
+                    "• **Silahçıdan satın alınan tüm silahlar RUHSATSIZDIR!**\n"
+                    "• Emniyet birimlerinin yapacağı üst aramasında veya denetimlerde ruhsatsız silah bulundurmak suç teşkil eder.\n"
                     "• Ödemeler doğrudan **NAKİT** cüzdanınızdan tahsil edilir.\n"
                     "• Satın aldığınız silahlar anında dijital envanterinize kaydedilir.\n"
                     "• Sunucu kuralları gereği envantersiz silah kullanımı (E.S.K) cezalandırılır.\n"

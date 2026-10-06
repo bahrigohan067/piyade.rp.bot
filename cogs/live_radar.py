@@ -397,7 +397,7 @@ class LiveRadar(commands.Cog):
                                 title="🚨 E.S.K İHLALİ (ENVANTERSİZ SİLAH KULLANIMI)",
                                 description=(
                                     f"**{killer_name}**, Discord envanterinde kayıtlı olmayan **`{silah}`** ile cinayet/saldırı gerçekleştirdi!\n"
-                                    "Sunucu kuralları gereği ruhsatı ve envanter kaydı bulunmayan ateşli silahların kullanımı yasaktır."
+                                    "Sunucu kuralları gereği envanter kaydı bulunmayan ateşli silahların kullanımı kesinlikle yasaktır."
                                 ),
                                 color=discord.Color.dark_red(),
                                 timestamp=datetime.fromtimestamp(ts, tz=timezone.utc) if ts else datetime.now(tz_tr)
@@ -407,8 +407,8 @@ class LiveRadar(commands.Cog):
                             esk_embed.add_field(name="🔫 Kullanılan Silah", value=f"`{silah}`", inline=True)
                             esk_embed.add_field(name="🎒 Envanter Durumu", value=f"❌ Saldırganın envanterinde **`{silah}`** BULUNMUYOR!", inline=False)
 
-                            komun_str = f"📍 X: `{x_val}` | Z: `{z_val}` (Posta: `{postal}` • {street})"
-                            esk_embed.add_field(name="📍 Olay Yeri", value=komun_str, inline=False)
+                            konum_str = f"📍 X: `{x_val}` | Z: `{z_val}` (Posta: `{postal}` • {street})"
+                            esk_embed.add_field(name="📍 Olay Yeri", value=konum_str, inline=False)
                             esk_embed.set_footer(text="Piyade RP • Otomatik E.S.K Denetim Sistemi")
 
                             try:
