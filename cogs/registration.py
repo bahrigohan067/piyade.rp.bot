@@ -32,6 +32,7 @@ ERKEK_ROL_ID = 1534736940904218755            # Erkek
 KIZ_ROL_ID = 1534736941600342016              # Kız
 KAYITSIZ_ROL_ID = 1542271426386591894         # Kayıtsız (final onayda alınır)
 GRUP_ONAY_BEKLIYOR_ROL_ID = 1556628657878081546  # 1. onaydan sonra verilir, final onayda alınır
+ONAYLANMIS_BIREY_ROL_ID = 1534741499726663690        # Onaylanmış birey
 WHITELIST_YETKILISI_ROL_ID = 1551242344190189718  # Bildirim için etiketlenir
 KURUCU_ROL_ID = 1529546007635824680
 
@@ -1273,6 +1274,7 @@ async def hesabimi_onayla(interaction: discord.Interaction):
 
         kayit["asama"] = "karakter_bekliyor"
         kayit["grup_dogrulama"] = {"yontem": yontem, "tarih": _simdi(), "rutbe": rutbe}
+        await _rolleri_duzenle(uye, [ONAYLANMIS_BIREY_ROL_ID], [], "Roblox hesabı onaylandı")
 
         thread, _ = await thread_hazirla(guild, uye, kayit)
         if thread:
@@ -1538,7 +1540,7 @@ async def karakter_onayla(interaction: discord.Interaction, uid: int):
         kr = kayit["karakter"]
         karakter_adi_kaydet(kr["ad"], uid)
         cinsiyet_rol = KIZ_ROL_ID if kayit.get("cinsiyet") == "Kız" else ERKEK_ROL_ID if kayit.get("cinsiyet") == "Erkek" else None
-        ekle = [UYE_ROL_ID, WHITELIST_ROL_ID] + ([cinsiyet_rol] if cinsiyet_rol else [])
+        ekle = [UYE_ROL_ID, WHITELIST_ROL_ID, ONAYLANMIS_BIREY_ROL_ID] + ([cinsiyet_rol] if cinsiyet_rol else [])
         rol_ok = await _rolleri_duzenle(uye, ekle, [KAYITSIZ_ROL_ID, GRUP_ONAY_BEKLIYOR_ROL_ID], "Kayıt tamamlandı (karakter onaylandı)")
 
         nick = _nick_olustur(kr["ad"], kayit["roblox_ad"])
@@ -1939,28 +1941,57 @@ async def ck_basvur_tiklandi(interaction: discord.Interaction):
         return await interaction.response.send_message("❌ CK başvurusu yapabilmek için sunucumuzda kayıtlı bir **Üye** olmalısınız.", ephemeral=True)
 
     ck_data = _veri()["ck_basvurulari"].get(str(uid))
-    if ck_data and ck_data.get("durum") in ("onay_bekliyor", "grup_bekliyor"):
-        if ck_data.get("durum") == "grup_bekliyor":
-            return await interaction.response.send_message("⏳ CK başvurunuz onaylandı! Yeni hesabınızla gruba katılma isteği attıktan sonra paneldeki **'Yeni Hesabımı Onayla'** butonuna basınız.", ephemeral=True)
-        return await interaction.response.send_message("⏳ Yetkililer tarafından incelenmekte olan aktif bir CK başvurunuz bulunuyor.", ephemeral=True)
+    if ck_data:
+        durum = ck_data.get("durum")
+        if durum == "grup_bekliyor":
+            return await interaction.response.send_message(
+                "⏳ CK başvurunuz ön onay aldı! Yeni hesabınızla gruba katılma isteği attıktan sonra paneldeki **'Yeni Hesabımı Onayla'** butonuna basınız.",
+                ephemeral=True,
+            )
+        elif durum == "onay_bekliyor":
+            return await interaction.response.send_message(
+                "⏳ Yetkililer tarafından incelenmekte olan aktif bir CK başvurunuz bulunuyor.",
+                ephemeral=True,
+            )
+        else:
+            # Durum 'reddedildi' veya 'tamamlandi' kalmışsa aktif başvurulardan temizle
+            _veri()["ck_basvurulari"].pop(str(uid), None)
+            await _kaydet()
 
-    kayit = kayit_al(uid)
-    son_ck = kayit.get("son_ck_tarihi") if kayit else None
-    if not son_ck:
-        gecmis = _veri()["ck_gecmisi"].get(str(uid), [])
-        if gecmis:
-            son_ck = gecmis[-1].get("onay_tarihi") or gecmis[-1].get("tarih")
-    if son_ck:
-        fark = _simdi() - son_ck
+    # 3 GÜN BEKLEME KURALI:
+    # Cooldown YALNIZCA ONAYLANAN (TAMAMLANAN) CK işlemleri için geçerlidir!
+    # Başvuru reddedildiyse kullanıcı beklemeden anında tekrar anket doldurabilir.
+    son_onayli_ck = None
+    gecmis = _veri()["ck_gecmisi"].get(str(uid), [])
+    for item in reversed(gecmis):
+        if item.get("durum") in ("tamamlandi", "onaylandi") and item.get("durum") != "reddedildi":
+            t = item.get("onay_tarihi") or item.get("tamamlanma_tarihi")
+            if not t and isinstance(item.get("grup_dogrulama"), dict):
+                t = item["grup_dogrulama"].get("tarih")
+            if t:
+                son_onayli_ck = t
+                break
+
+    # Geçmiş listesinde onaylı başvuru yoksa kayıt profilindeki son_ck_tarihi alanına bak
+    if not son_onayli_ck:
+        kayit = kayit_al(uid)
+        if kayit and kayit.get("son_ck_tarihi"):
+            son_onayli_ck = kayit["son_ck_tarihi"]
+
+    if son_onayli_ck:
+        fark = _simdi() - son_onayli_ck
         if fark < CK_COOLDOWN_SANIYE:
             kalan_saniye = CK_COOLDOWN_SANIYE - fark
             kalan_saat = kalan_saniye // 3600
             kalan_dakika = (kalan_saniye % 3600) // 60
             return await interaction.response.send_message(
-                f"⏳ Son CK işleminizin üzerinden 3 gün geçmeden yeni başvuru yapamazsınız.\nKalan bekleme süresi: **{kalan_saat} saat {kalan_dakika} dakika**.",
+                f"⏳ Son onaylanan CK işleminizin üzerinden 3 gün geçmeden yeni başvuru yapamazsınız.\n"
+                f"Kalan bekleme süresi: **{kalan_saat} saat {kalan_dakika} dakika**.\n"
+                "-# (Not: Bu bekleme süresi sadece onaylanmış karakter değişimleri için geçerlidir. Reddedilen başvurularda bekleme süresi uygulanmaz.)",
                 ephemeral=True,
             )
 
+    kayit = kayit_al(uid)
     mevcut_roblox = kayit.get("roblox_ad") if kayit else ""
     if not mevcut_roblox and "|" in uye.display_name:
         mevcut_roblox = uye.display_name.split("|")[-1].strip()
@@ -2053,6 +2084,8 @@ async def ck_yeni_hesap_onayla_tiklandi(interaction: discord.Interaction):
         ck_data["durum"] = "tamamlandi"
         ck_data["grup_dogrulama"] = {"yontem": yontem, "rutbe": rutbe, "tarih": _simdi()}
         _veri()["ck_gecmisi"].setdefault(str(uid), []).append(ck_data)
+        _veri()["ck_basvurulari"].pop(str(uid), None)
+        await _rolleri_duzenle(uye, [ONAYLANMIS_BIREY_ROL_ID], [], "CK yeni Roblox hesabı onaylandı")
         await _kaydet()
 
     yetkili = await _uye_getir(interaction.guild, ck_data.get("onaylayan_id"))
@@ -2155,6 +2188,8 @@ async def ck_onayla(interaction: discord.Interaction, uid: int):
             ck_data["onaylayan_id"] = interaction.user.id
             ck_data["onay_tarihi"] = _simdi()
             _veri()["ck_gecmisi"].setdefault(str(uid), []).append(ck_data)
+            _veri()["ck_basvurulari"].pop(str(uid), None)
+            await _rolleri_duzenle(uye, [ONAYLANMIS_BIREY_ROL_ID], [], "CK onaylandı")
             await _kaydet()
 
             if uye:
@@ -2239,6 +2274,7 @@ class CKRedModal(discord.ui.Modal, title="❌ CK Başvurusunu Reddet"):
             ck_data["reddeden_id"] = interaction.user.id
             ck_data["red_tarihi"] = _simdi()
             _veri()["ck_gecmisi"].setdefault(str(self.hedef_id), []).append(ck_data)
+            _veri()["ck_basvurulari"].pop(str(self.hedef_id), None)
             await _kaydet()
 
         if uye:
@@ -2415,6 +2451,7 @@ class MevcutUyeModal(discord.ui.Modal, title="🛡️ Mevcut Üye Roblox Eşleme
             karakter_adi_kaydet(kr_ad, uid)
             await _kaydet()
 
+        await _rolleri_duzenle(uye, [ONAYLANMIS_BIREY_ROL_ID], [], "Mevcut üye Roblox hesabı onaylandı")
         await dosya_guncelle(interaction.client, kayit)
 
         await interaction.followup.send(
@@ -2612,12 +2649,37 @@ class Registration(commands.Cog):
             _roblox_baglantisini_birak(kayit)
             _thread_silme_planla(kayit, gecikme=0)
             _veri()["kullanicilar"].pop(str(kullanici.id), None)
+            _veri()["ck_basvurulari"].pop(str(kullanici.id), None)
+            _veri()["ck_gecmisi"].pop(str(kullanici.id), None)
             await _kaydet()
         uye = await _uye_getir(interaction.guild, kullanici.id)
         if uye:
-            await _rolleri_duzenle(uye, [], [GRUP_ONAY_BEKLIYOR_ROL_ID], f"Kayıt sıfırlandı ({interaction.user})")
+            await _rolleri_duzenle(uye, [], [GRUP_ONAY_BEKLIYOR_ROL_ID, ONAYLANMIS_BIREY_ROL_ID], f"Kayıt sıfırlandı ({interaction.user})")
         await interaction.followup.send(
             f"✅ {kullanici.mention} kaydı sıfırlandı. Roblox bağlantısı (`{kayit.get('roblox_ad')}`) serbest bırakıldı; kullanıcı yeniden başvurabilir.",
+            ephemeral=True,
+        )
+
+    @app_commands.command(name="ck-sifirla", description="Bir kullanıcının CK bekleme süresini (cooldown) ve bekleyen CK başvurusunu sıfırlar.")
+    @app_commands.describe(kullanici="CK süresi sıfırlanacak kullanıcı")
+    async def ck_sifirla(self, interaction: discord.Interaction, kullanici: discord.Member):
+        if not yetkili_mi(interaction.user):
+            return await interaction.response.send_message("❌ Yetkiniz bulunmuyor.", ephemeral=True)
+        await interaction.response.defer(ephemeral=True)
+        uid_str = str(kullanici.id)
+        async with _kilit(kullanici.id):
+            _veri()["ck_basvurulari"].pop(uid_str, None)
+            kayit = kayit_al(kullanici.id)
+            if kayit and "son_ck_tarihi" in kayit:
+                kayit.pop("son_ck_tarihi", None)
+            if uid_str in _veri()["ck_gecmisi"]:
+                for item in _veri()["ck_gecmisi"][uid_str]:
+                    if item.get("durum") in ("tamamlandi", "onaylandi"):
+                        item["durum"] = "sifirlandi"
+            await _kaydet()
+
+        await interaction.followup.send(
+            f"✅ {kullanici.mention} kullanıcısının CK bekleme süresi ve başvuruları sıfırlandı. Kullanıcı hemen yeni CK başvurusu yapabilir.",
             ephemeral=True,
         )
 
