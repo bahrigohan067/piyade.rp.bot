@@ -13,7 +13,6 @@ ROLE_BUILDER = 1534756885016871083
 ROLE_LEGAL = 1539318613498929193
 ROLE_ILLEGAL = 1539249508314259567
 ROLE_SICAK_KANLI = 1534757047919317172
-ROLE_MUZIK_IZNI = 1547589732937240627
 # =================================================
 
 class RolSecimView(discord.ui.View):
@@ -100,11 +99,6 @@ class RolSecimView(discord.ui.View):
     @discord.ui.button(label="SICAK KANLI", emoji="❤️", style=discord.ButtonStyle.secondary, custom_id="rs_sicakkanli")
     async def btn_sicakkanli(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.toggle_roles(interaction, [ROLE_SICAK_KANLI], "SICAK KANLI")
-
-    # 7. Müzik İzni
-    @discord.ui.button(label="Müzik İzni", emoji="🎵", style=discord.ButtonStyle.secondary, custom_id="rs_muzik")
-    async def btn_muzik(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.toggle_roles(interaction, [ROLE_MUZIK_IZNI], "Müzik İzni")
 
 
 class RolSecim(commands.Cog):
