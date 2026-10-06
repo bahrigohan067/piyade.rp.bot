@@ -1003,6 +1003,31 @@ class UyariSistemi(commands.Cog):
         
         await interaction.followup.send(f"✅ {kisi.mention} kişisinin tüm uyarıları sıfırlandı ve kanaldaki {silinen} adet uyarı log mesajı silindi.", ephemeral=True)
 
+        
+        uid = str(kisi.id)
+        data = load_data(UYARI_DATA_FILE)
+        
+        if uid in data:
+            data[uid] = {
+                "uyarilar": [],
+                "toplam_puan": 0,
+                "kademe": 0,
+                "son_uyari_tarihi": None,
+                "jail_bitis": None
+            }
+            save_data(UYARI_DATA_FILE, data)
+        
+        # Tüm uyarı + jail rollerini kaldır
+        silinecek = [interaction.guild.get_role(r) for r in TUM_UYARI_ROLLERI + [JAIL_ROL] 
+                     if interaction.guild.get_role(r) and interaction.guild.get_role(r) in kisi.roles]
+        if silinecek:
+            try:
+                await kisi.remove_roles(*silinecek, reason=f"Uyarılar sıfırlandı — {interaction.user}")
+            except discord.Forbidden:
+                pass
+        
+        await interaction.response.send_message(f"✅ {kisi.mention} kişisinin tüm uyarıları sıfırlandı.", ephemeral=True)
+
 
 async def setup(bot):
     await bot.add_cog(UyariSistemi(bot))
