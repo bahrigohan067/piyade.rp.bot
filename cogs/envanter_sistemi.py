@@ -20,6 +20,7 @@ ATM_KANAL_ID = 1557055667339137127
 MARKET_KANAL_ID = 1557055691405926400
 SILAHCI_KANAL_ID = 1557055717389901894
 ILLEGAL_MARKET_KANAL_ID = 1557056451644629032
+EKONOMI_PANEL_KANAL_ID = 1557403029639008277
 ESK_LOG_KANAL_ID = 1557045447808520393
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -27,6 +28,7 @@ DATA_DIR = os.path.join(BASE_DIR, "data")
 ENVANTER_FILE = os.path.join(DATA_DIR, "envanter_verileri.json")
 KAYIT_FILE = os.path.join(DATA_DIR, "kayit_data.json")
 ATM_FILE = os.path.join(DATA_DIR, "atm_noktalari.json")
+EKONOMI_LOGO_PATH = os.path.join(BASE_DIR, "assets", "ekonomi_panel_logo.jpg")
 
 # =====================================================================
 # EŞYA VE FİYAT TANIMLARI
@@ -67,7 +69,8 @@ def _get_raw_data() -> dict:
             "atm": None,
             "market": None,
             "gunshop": None,
-            "illegal_market": None
+            "illegal_market": None,
+            "ekonomi_yetkili": None
         }
     }
     data = load_json(ENVANTER_FILE, default_structure)
@@ -75,7 +78,13 @@ def _get_raw_data() -> dict:
         data = default_structure
     data.setdefault("users", {})
     data.setdefault("gunshop_stock", {"Beretta 92": 50, "Colt 1911": 50})
-    data.setdefault("panel_messages", {"atm": None, "market": None, "gunshop": None, "illegal_market": None})
+    data.setdefault("panel_messages", {
+        "atm": None,
+        "market": None,
+        "gunshop": None,
+        "illegal_market": None,
+        "ekonomi_yetkili": None
+    })
     return data
 
 def _save_raw_data(data: dict):
@@ -652,6 +661,589 @@ class GunshopView(discord.ui.View):
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
 # =====================================================================
+# EKONOMİ YETKİLİ PANELİ VE İŞLEM FORMLARI
+# =====================================================================
+def get_all_item_options() -> list[discord.SelectOption]:
+    """Tüm market, illegal market ve ruhsatsız silah seçeneklerini dropdown için listeler."""
+    options = []
+    # Market Eşyaları (5 adet)
+    for name, info in MARKET_ESYALARI.items():
+        options.append(discord.SelectOption(
+            label=name,
+            value=name,
+            description=f"Market • Fiyat: {format_usd(info['fiyat'])}",
+            emoji=info["emoji"]
+        ))
+    # İllegal Market Eşyaları (4 adet)
+    for name, info in ILLEGAL_ESYALAR.items():
+        options.append(discord.SelectOption(
+            label=name,
+            value=name,
+            description=f"İllegal Market • Fiyat: {format_usd(info['fiyat'])}",
+            emoji=info["emoji"]
+        ))
+    # Silahlar (2 adet)
+    for name, info in SILAH_ESYALARI.items():
+        options.append(discord.SelectOption(
+            label=f"{name} (Ruhsatsız)",
+            value=name,
+            description=f"Silahçı • Fiyat: {format_usd(info['fiyat'])}",
+            emoji=info["emoji"]
+        ))
+    return options
+
+def olustur_ekonomi_yetkili_embed(has_attachment: bool = True) -> discord.Embed:
+    """Ekonomi Yetkilisi kontrol paneli için Discord embed nesnesini hazırlar."""
+    embed = discord.Embed(
+        title="💼 PRP | EKONOMİ YETKİLİ PANELİ",
+        color=0xD4AF37,
+        timestamp=datetime.now(timezone.utc)
+    )
+    if has_attachment:
+        embed.set_thumbnail(url="attachment://ekonomi_panel_logo.jpg")
+
+    embed.description = (
+        "**[ KULLANIM KILAVUZU ]**\n"
+        "• **➕ Eşya Ekle:** Sunucuda kayıtlı bir üyeyi ve verilecek eşyayı/ruhsatsız silahı seçerek dilediğiniz adette envanterine yükler.\n"
+        "• **➖ Eşya Sil:** Seçtiğiniz üyenin envanterindeki belirli bir eşyayı veya silahı belirttiğiniz adette eksiltir.\n"
+        "• **💵 Para Ekle:** Belirlediğiniz kayıtlı üyenin cüzdanına doğrudan nakit dolar ($) ekler.\n"
+        "• **💸 Para Sil:** Seçtiğiniz üyenin üzerindeki nakit paradan belirttiğiniz dolar ($) tutarı kadar kesinti yapar.\n"
+        "• **📦 Stok Yenile:** Ammu-Nation silah mağazasına **50 adet Beretta 92** ve **50 adet Colt 1911** tedarik eder, vitrini canlı günceller.\n"
+        "\n──────────────────────────────────────────\n\n"
+        "**[ DİKKAT EDİLMESİ GEREKEN HUSUSLAR ]**\n"
+        "• Bu paneldeki tüm müdahaleler yetkili denetim kayıtlarına (audit log) anlık olarak işlenir.\n"
+        "• Silahçıdan tedarik edilen veya dağıtılan tüm ateşli silahlar **RUHSATSIZDIR**.\n"
+        "• Oyuncuların envanter ve bakiye durumunu `/envanter [üye]` ve `/param [üye]` komutlarıyla da teyit edebilirsiniz.\n"
+        "• Yetkinizi amacı dışında kullanmak veya usulsüz ekonomi müdahalesi yapmak kesinlikle yasaktır."
+    )
+    embed.set_footer(text="Piyade Roleplay • Ekonomi Yönetim ve Denetim Kurulu")
+    return embed
+
+
+# ── 1. Eşya Ekle Modal & View ──
+class EsyaEkleModal(discord.ui.Modal):
+    def __init__(self, member: discord.Member | discord.User, esya_adi: str):
+        super().__init__(title=f"Eşya Ekle: {esya_adi[:18]}")
+        self.member = member
+        self.esya_adi = esya_adi
+
+        self.adet = discord.ui.TextInput(
+            label="Eklenecek Adet",
+            placeholder="Örn: 1 veya 5",
+            min_length=1,
+            max_length=5,
+            required=True
+        )
+        self.add_item(self.adet)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            adet_val = int(self.adet.value.strip())
+            if adet_val <= 0:
+                raise ValueError
+        except ValueError:
+            return await interaction.response.send_message("❌ Geçerli ve pozitif bir sayı girmelisiniz!", ephemeral=True)
+
+        async with _ENV_LOCK:
+            user = get_user_profile(self.member.id)
+            user["inventory"][self.esya_adi] = user["inventory"].get(self.esya_adi, 0) + adet_val
+            update_user_profile(self.member.id, user)
+
+        embed = discord.Embed(
+            title="✅ Envantere Eşya Eklendi",
+            color=discord.Color.green(),
+            description=(
+                f"👤 **Yetkili:** {interaction.user.mention}\n"
+                f"🎯 **Hedef Üye:** {self.member.mention}\n"
+                f"📦 **Eklenen Eşya:** `{self.esya_adi}`\n"
+                f"🔢 **Eklenen Miktar:** `+{adet_val} adet`\n\n"
+                f"📊 **Kullanıcının Güncel Envanteri:** `{user['inventory'][self.esya_adi]} adet`"
+            ),
+            timestamp=datetime.now(timezone.utc)
+        )
+        embed.set_footer(text="Piyade RP • Ekonomi Yönetim Sistemi")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+class EsyaEkleSelectView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=180)
+        self.selected_user: discord.Member | discord.User | None = None
+        self.selected_item: str | None = None
+
+        self.user_select = discord.ui.UserSelect(
+            placeholder="👤 Eşya eklenecek üyeyi seçin...",
+            min_values=1,
+            max_values=1,
+            row=0
+        )
+        self.user_select.callback = self.on_user_select
+        self.add_item(self.user_select)
+
+        self.item_select = discord.ui.Select(
+            placeholder="📦 Eklenecek eşyayı / silahı seçin...",
+            options=get_all_item_options(),
+            min_values=1,
+            max_values=1,
+            row=1
+        )
+        self.item_select.callback = self.on_item_select
+        self.add_item(self.item_select)
+
+        self.submit_btn = discord.ui.Button(
+            label="İleri • Miktar Belirle ve Ekle",
+            style=discord.ButtonStyle.success,
+            emoji="➕",
+            row=2
+        )
+        self.submit_btn.callback = self.on_submit_click
+        self.add_item(self.submit_btn)
+
+    async def on_user_select(self, interaction: discord.Interaction):
+        if self.user_select.values:
+            self.selected_user = self.user_select.values[0]
+        await interaction.response.defer()
+
+    async def on_item_select(self, interaction: discord.Interaction):
+        if self.item_select.values:
+            self.selected_item = self.item_select.values[0]
+        await interaction.response.defer()
+
+    async def on_submit_click(self, interaction: discord.Interaction):
+        target_user = self.selected_user or (self.user_select.values[0] if self.user_select.values else None)
+        target_item = self.selected_item or (self.item_select.values[0] if self.item_select.values else None)
+
+        if not target_user or not target_item:
+            return await interaction.response.send_message(
+                "⚠️ Lütfen önce menülerden **hem işlem yapılacak üyeyi hem de eşyayı** seçiniz!",
+                ephemeral=True
+            )
+
+        await interaction.response.send_modal(EsyaEkleModal(target_user, target_item))
+
+
+# ── 2. Eşya Sil Modal & View ──
+class EsyaSilModal(discord.ui.Modal):
+    def __init__(self, member: discord.Member | discord.User, esya_adi: str):
+        super().__init__(title=f"Eşya Sil: {esya_adi[:18]}")
+        self.member = member
+        self.esya_adi = esya_adi
+
+        self.adet = discord.ui.TextInput(
+            label="Silinecek Adet",
+            placeholder="Örn: 1 veya 5",
+            min_length=1,
+            max_length=5,
+            required=True
+        )
+        self.add_item(self.adet)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            adet_val = int(self.adet.value.strip())
+            if adet_val <= 0:
+                raise ValueError
+        except ValueError:
+            return await interaction.response.send_message("❌ Geçerli ve pozitif bir sayı girmelisiniz!", ephemeral=True)
+
+        async with _ENV_LOCK:
+            user = get_user_profile(self.member.id)
+            inv = user.get("inventory", {})
+            mevcut = inv.get(self.esya_adi, 0)
+
+            if mevcut <= 0:
+                return await interaction.response.send_message(
+                    f"❌ {self.member.mention} kullanıcısının envanterinde `{self.esya_adi}` bulunmamaktadır!",
+                    ephemeral=True
+                )
+
+            silinen = min(adet_val, mevcut)
+            kalan = mevcut - silinen
+            if kalan <= 0:
+                inv.pop(self.esya_adi, None)
+            else:
+                inv[self.esya_adi] = kalan
+
+            user["inventory"] = inv
+            update_user_profile(self.member.id, user)
+
+        embed = discord.Embed(
+            title="🗑️ Envanterden Eşya Silindi",
+            color=discord.Color.red(),
+            description=(
+                f"👤 **Yetkili:** {interaction.user.mention}\n"
+                f"🎯 **Hedef Üye:** {self.member.mention}\n"
+                f"📦 **Silinen Eşya:** `{self.esya_adi}`\n"
+                f"🔢 **Silinen Miktar:** `-{silinen} adet`\n\n"
+                f"📊 **Kullanıcıda Kalan:** `{kalan} adet`"
+            ),
+            timestamp=datetime.now(timezone.utc)
+        )
+        embed.set_footer(text="Piyade RP • Ekonomi Yönetim Sistemi")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+class EsyaSilSelectView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=180)
+        self.selected_user: discord.Member | discord.User | None = None
+        self.selected_item: str | None = None
+
+        self.user_select = discord.ui.UserSelect(
+            placeholder="👤 Eşyası silinecek üyeyi seçin...",
+            min_values=1,
+            max_values=1,
+            row=0
+        )
+        self.user_select.callback = self.on_user_select
+        self.add_item(self.user_select)
+
+        self.item_select = discord.ui.Select(
+            placeholder="📦 Silinecek eşyayı / silahı seçin...",
+            options=get_all_item_options(),
+            min_values=1,
+            max_values=1,
+            row=1
+        )
+        self.item_select.callback = self.on_item_select
+        self.add_item(self.item_select)
+
+        self.submit_btn = discord.ui.Button(
+            label="İleri • Miktar Belirle ve Sil",
+            style=discord.ButtonStyle.danger,
+            emoji="➖",
+            row=2
+        )
+        self.submit_btn.callback = self.on_submit_click
+        self.add_item(self.submit_btn)
+
+    async def on_user_select(self, interaction: discord.Interaction):
+        if self.user_select.values:
+            self.selected_user = self.user_select.values[0]
+        await interaction.response.defer()
+
+    async def on_item_select(self, interaction: discord.Interaction):
+        if self.item_select.values:
+            self.selected_item = self.item_select.values[0]
+        await interaction.response.defer()
+
+    async def on_submit_click(self, interaction: discord.Interaction):
+        target_user = self.selected_user or (self.user_select.values[0] if self.user_select.values else None)
+        target_item = self.selected_item or (self.item_select.values[0] if self.item_select.values else None)
+
+        if not target_user or not target_item:
+            return await interaction.response.send_message(
+                "⚠️ Lütfen önce menülerden **hem işlem yapılacak üyeyi hem de eşyayı** seçiniz!",
+                ephemeral=True
+            )
+
+        await interaction.response.send_modal(EsyaSilModal(target_user, target_item))
+
+
+# ── 3. Para Ekle Modal & View ──
+class ParaEkleModal(discord.ui.Modal):
+    def __init__(self, member: discord.Member | discord.User):
+        super().__init__(title=f"Para Ekle: {str(member)[:15]}")
+        self.member = member
+
+        self.miktar = discord.ui.TextInput(
+            label="Eklenecek Nakit Dolar Tutarı ($)",
+            placeholder="Örn: 5000",
+            min_length=1,
+            max_length=10,
+            required=True
+        )
+        self.add_item(self.miktar)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        clean_text = self.miktar.value.strip().replace("$", "").replace(".", "").replace(",", "")
+        try:
+            miktar_val = int(clean_text)
+            if miktar_val <= 0:
+                raise ValueError
+        except ValueError:
+            return await interaction.response.send_message("❌ Geçerli ve pozitif bir para tutarı girmelisiniz!", ephemeral=True)
+
+        async with _ENV_LOCK:
+            user = get_user_profile(self.member.id)
+            user["cash"] += miktar_val
+            update_user_profile(self.member.id, user)
+
+        embed = discord.Embed(
+            title="💵 Nakit Para Eklendi",
+            color=discord.Color.green(),
+            description=(
+                f"👤 **Yetkili:** {interaction.user.mention}\n"
+                f"🎯 **Hedef Üye:** {self.member.mention}\n"
+                f"💵 **Eklenen Tutar:** `+{format_usd(miktar_val)}`\n\n"
+                f"💰 **Kullanıcının Yeni Nakit Bakiyesi:** `{format_usd(user['cash'])}`"
+            ),
+            timestamp=datetime.now(timezone.utc)
+        )
+        embed.set_footer(text="Piyade RP • Ekonomi Yönetim Sistemi")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+class ParaEkleSelectView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=180)
+        self.selected_user: discord.Member | discord.User | None = None
+
+        self.user_select = discord.ui.UserSelect(
+            placeholder="👤 Nakit para eklenecek üyeyi seçin...",
+            min_values=1,
+            max_values=1,
+            row=0
+        )
+        self.user_select.callback = self.on_user_select
+        self.add_item(self.user_select)
+
+        self.submit_btn = discord.ui.Button(
+            label="İleri • Tutarı Gir ve Ekle",
+            style=discord.ButtonStyle.success,
+            emoji="💵",
+            row=1
+        )
+        self.submit_btn.callback = self.on_submit_click
+        self.add_item(self.submit_btn)
+
+    async def on_user_select(self, interaction: discord.Interaction):
+        if self.user_select.values:
+            self.selected_user = self.user_select.values[0]
+        await interaction.response.defer()
+
+    async def on_submit_click(self, interaction: discord.Interaction):
+        target_user = self.selected_user or (self.user_select.values[0] if self.user_select.values else None)
+        if not target_user:
+            return await interaction.response.send_message(
+                "⚠️ Lütfen önce para eklenecek bir üye seçiniz!",
+                ephemeral=True
+            )
+        await interaction.response.send_modal(ParaEkleModal(target_user))
+
+
+# ── 4. Para Sil Modal & View ──
+class ParaSilModal(discord.ui.Modal):
+    def __init__(self, member: discord.Member | discord.User):
+        super().__init__(title=f"Para Sil: {str(member)[:15]}")
+        self.member = member
+
+        self.miktar = discord.ui.TextInput(
+            label="Silinecek Nakit Dolar Tutarı ($)",
+            placeholder="Örn: 2500",
+            min_length=1,
+            max_length=10,
+            required=True
+        )
+        self.add_item(self.miktar)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        clean_text = self.miktar.value.strip().replace("$", "").replace(".", "").replace(",", "")
+        try:
+            miktar_val = int(clean_text)
+            if miktar_val <= 0:
+                raise ValueError
+        except ValueError:
+            return await interaction.response.send_message("❌ Geçerli ve pozitif bir para tutarı girmelisiniz!", ephemeral=True)
+
+        async with _ENV_LOCK:
+            user = get_user_profile(self.member.id)
+            mevcut_nakit = user.get("cash", 0)
+            if mevcut_nakit <= 0:
+                return await interaction.response.send_message(
+                    f"❌ {self.member.mention} kullanıcısının üzerinde hiç nakit para bulunmamaktadır!",
+                    ephemeral=True
+                )
+
+            silinen = min(miktar_val, mevcut_nakit)
+            user["cash"] = mevcut_nakit - silinen
+            update_user_profile(self.member.id, user)
+
+        embed = discord.Embed(
+            title="💸 Nakit Para Silindi",
+            color=discord.Color.red(),
+            description=(
+                f"👤 **Yetkili:** {interaction.user.mention}\n"
+                f"🎯 **Hedef Üye:** {self.member.mention}\n"
+                f"💸 **Silinen Tutar:** `-{format_usd(silinen)}`\n\n"
+                f"💰 **Kullanıcının Kalan Nakit Bakiyesi:** `{format_usd(user['cash'])}`"
+            ),
+            timestamp=datetime.now(timezone.utc)
+        )
+        embed.set_footer(text="Piyade RP • Ekonomi Yönetim Sistemi")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+class ParaSilSelectView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=180)
+        self.selected_user: discord.Member | discord.User | None = None
+
+        self.user_select = discord.ui.UserSelect(
+            placeholder="👤 Nakit parası silinecek üyeyi seçin...",
+            min_values=1,
+            max_values=1,
+            row=0
+        )
+        self.user_select.callback = self.on_user_select
+        self.add_item(self.user_select)
+
+        self.submit_btn = discord.ui.Button(
+            label="İleri • Tutarı Gir ve Sil",
+            style=discord.ButtonStyle.danger,
+            emoji="💸",
+            row=1
+        )
+        self.submit_btn.callback = self.on_submit_click
+        self.add_item(self.submit_btn)
+
+    async def on_user_select(self, interaction: discord.Interaction):
+        if self.user_select.values:
+            self.selected_user = self.user_select.values[0]
+        await interaction.response.defer()
+
+    async def on_submit_click(self, interaction: discord.Interaction):
+        target_user = self.selected_user or (self.user_select.values[0] if self.user_select.values else None)
+        if not target_user:
+            return await interaction.response.send_message(
+                "⚠️ Lütfen önce nakit parası silinecek bir üye seçiniz!",
+                ephemeral=True
+            )
+        await interaction.response.send_modal(ParaSilModal(target_user))
+
+
+# ── 5. Sabit Ekonomi Yetkili Paneli Görünümü (Persistent View) ──
+class EkonomiYetkiliPanelView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(
+        label="Eşya Ekle",
+        emoji="➕",
+        style=discord.ButtonStyle.success,
+        custom_id="ekonomi_btn_esya_ekle",
+        row=0
+    )
+    async def esya_ekle_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not yetkili_mi(interaction.user):
+            return await interaction.response.send_message(
+                f"❌ Bu işlemi yalnızca <@&{EKONOMI_YETKILISI_ROL_ID}> rolüne sahip Ekonomi Yetkilileri gerçekleştirebilir!",
+                ephemeral=True
+            )
+        await interaction.response.send_message(
+            "➕ **ENVANTERE EŞYA EKLEME İŞLEMİ**\n"
+            "1. Aşağıdan işlem yapılacak **üyeyi** seçin.\n"
+            "2. Eklenecek **eşyayı / ruhsatsız silahı** seçin.\n"
+            "3. **İleri • Miktar Belirle ve Ekle** butonuna tıklayarak adedi girin.",
+            view=EsyaEkleSelectView(),
+            ephemeral=True
+        )
+
+    @discord.ui.button(
+        label="Eşya Sil",
+        emoji="➖",
+        style=discord.ButtonStyle.danger,
+        custom_id="ekonomi_btn_esya_sil",
+        row=0
+    )
+    async def esya_sil_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not yetkili_mi(interaction.user):
+            return await interaction.response.send_message(
+                f"❌ Bu işlemi yalnızca <@&{EKONOMI_YETKILISI_ROL_ID}> rolüne sahip Ekonomi Yetkilileri gerçekleştirebilir!",
+                ephemeral=True
+            )
+        await interaction.response.send_message(
+            "➖ **ENVANTERDEN EŞYA SİLME İŞLEMİ**\n"
+            "1. Aşağıdan işlem yapılacak **üyeyi** seçin.\n"
+            "2. Silinecek **eşyayı / ruhsatsız silahı** seçin.\n"
+            "3. **İleri • Miktar Belirle ve Sil** butonuna tıklayarak adedi girin.",
+            view=EsyaSilSelectView(),
+            ephemeral=True
+        )
+
+    @discord.ui.button(
+        label="Para Ekle",
+        emoji="💵",
+        style=discord.ButtonStyle.success,
+        custom_id="ekonomi_btn_para_ekle",
+        row=1
+    )
+    async def para_ekle_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not yetkili_mi(interaction.user):
+            return await interaction.response.send_message(
+                f"❌ Bu işlemi yalnızca <@&{EKONOMI_YETKILISI_ROL_ID}> rolüne sahip Ekonomi Yetkilileri gerçekleştirebilir!",
+                ephemeral=True
+            )
+        await interaction.response.send_message(
+            "💵 **NAKİT PARA EKLEME İŞLEMİ**\n"
+            "1. Aşağıdan nakit para eklenecek **üyeyi** seçin.\n"
+            "2. **İleri • Tutarı Gir ve Ekle** butonuna tıklayarak dolar ($) miktarını belirleyin.",
+            view=ParaEkleSelectView(),
+            ephemeral=True
+        )
+
+    @discord.ui.button(
+        label="Para Sil",
+        emoji="💸",
+        style=discord.ButtonStyle.danger,
+        custom_id="ekonomi_btn_para_sil",
+        row=1
+    )
+    async def para_sil_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not yetkili_mi(interaction.user):
+            return await interaction.response.send_message(
+                f"❌ Bu işlemi yalnızca <@&{EKONOMI_YETKILISI_ROL_ID}> rolüne sahip Ekonomi Yetkilileri gerçekleştirebilir!",
+                ephemeral=True
+            )
+        await interaction.response.send_message(
+            "💸 **NAKİT PARA SİLME İŞLEMİ**\n"
+            "1. Aşağıdan nakit parası silinecek **üyeyi** seçin.\n"
+            "2. **İleri • Tutarı Gir ve Sil** butonuna tıklayarak kesilecek tutarı belirleyin.",
+            view=ParaSilSelectView(),
+            ephemeral=True
+        )
+
+    @discord.ui.button(
+        label="Stok Yenile",
+        emoji="📦",
+        style=discord.ButtonStyle.primary,
+        custom_id="ekonomi_btn_stok_yenile",
+        row=1
+    )
+    async def stok_yenile_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not yetkili_mi(interaction.user):
+            return await interaction.response.send_message(
+                f"❌ Bu işlemi yalnızca <@&{EKONOMI_YETKILISI_ROL_ID}> rolüne sahip Ekonomi Yetkilileri gerçekleştirebilir!",
+                ephemeral=True
+            )
+
+        async with _ENV_LOCK:
+            data = _get_raw_data()
+            stoklar = data.setdefault("gunshop_stock", {"Beretta 92": 0, "Colt 1911": 0})
+            stoklar["Beretta 92"] = stoklar.get("Beretta 92", 0) + 50
+            stoklar["Colt 1911"] = stoklar.get("Colt 1911", 0) + 50
+            _save_raw_data(data)
+
+        cog = interaction.client.get_cog("EnvanterSistemi")
+        if cog:
+            await cog.guncelle_gunshop_paneli(interaction.guild)
+
+        embed = discord.Embed(
+            title="📦 SİLAH STOKLARI YENİLENDİ",
+            color=discord.Color.gold(),
+            description=(
+                f"✅ {interaction.user.mention} tarafından mağaza stokları güncellendi!\n\n"
+                f"• **Beretta 92:** +50 Adet eklendi (Yeni Stok: **{stoklar['Beretta 92']}**)\n"
+                f"• **Colt 1911:** +50 Adet eklendi (Yeni Stok: **{stoklar['Colt 1911']}**)\n\n"
+                f"🔫 Ammu-Nation vitrini ve paneli anlık olarak güncellendi."
+            ),
+            timestamp=datetime.now(timezone.utc)
+        )
+        embed.set_footer(text="Piyade RP • Ammu-Nation Tedarik Zinciri")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+# =====================================================================
 # ENVANTER SİSTEMİ ANA COG
 # =====================================================================
 class EnvanterSistemi(commands.Cog):
@@ -804,36 +1396,37 @@ class EnvanterSistemi(commands.Cog):
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    @app_commands.command(name="stok-yenile", description="Silahçıdaki silah stoklarına 50'şer adet ekler.")
-    async def cmd_stok_yenile(self, interaction: discord.Interaction):
+    @app_commands.command(name="ekonomi-paneli-kur", description="Ekonomi Yetkilisi kontrol panelini sabit kanalına kurar.")
+    async def cmd_ekonomi_paneli_kur(self, interaction: discord.Interaction):
         if not yetkili_mi(interaction.user):
-            return await interaction.response.send_message(
-                f"❌ Bu komutu yalnızca <@&{EKONOMI_YETKILISI_ROL_ID}> rolüne sahip Ekonomi Yetkilileri kullanabilir!",
-                ephemeral=True
-            )
+            return await interaction.response.send_message("❌ Bu komutu yalnızca Ekonomi Yetkilileri kullanabilir!", ephemeral=True)
 
-        async with _ENV_LOCK:
-            data = _get_raw_data()
-            stoklar = data.setdefault("gunshop_stock", {"Beretta 92": 0, "Colt 1911": 0})
-            stoklar["Beretta 92"] = stoklar.get("Beretta 92", 0) + 50
-            stoklar["Colt 1911"] = stoklar.get("Colt 1911", 0) + 50
-            _save_raw_data(data)
+        await interaction.response.defer(ephemeral=True)
+        guild = interaction.guild
+        kanal = guild.get_channel(EKONOMI_PANEL_KANAL_ID)
+        if not kanal:
+            return await interaction.followup.send(f"❌ Ekonomi Panel kanalı (`{EKONOMI_PANEL_KANAL_ID}`) bulunamadı!", ephemeral=True)
 
-        # Paneli anlık güncelle
-        await self.guncelle_gunshop_paneli(interaction.guild)
+        try:
+            await kanal.purge(limit=10)
+        except Exception:
+            pass
 
-        embed = discord.Embed(
-            title="📦 SİLAH STOKLARI YENİLENDİ",
-            color=discord.Color.gold(),
-            description=(
-                f"✅ {interaction.user.mention} tarafından mağaza stokları güncellendi!\n\n"
-                f"• **Beretta 92:** +50 Adet eklendi (Yeni Stok: **{stoklar['Beretta 92']}**)\n"
-                f"• **Colt 1911:** +50 Adet eklendi (Yeni Stok: **{stoklar['Colt 1911']}**)"
-            )
-        )
-        await interaction.response.send_message(embed=embed)
+        has_file = os.path.exists(EKONOMI_LOGO_PATH)
+        embed = olustur_ekonomi_yetkili_embed(has_attachment=has_file)
+        if has_file:
+            file = discord.File(EKONOMI_LOGO_PATH, filename="ekonomi_panel_logo.jpg")
+            msg = await kanal.send(embed=embed, file=file, view=EkonomiYetkiliPanelView())
+        else:
+            msg = await kanal.send(embed=embed, view=EkonomiYetkiliPanelView())
 
-    @app_commands.command(name="market-panelleri-kur", description="ATM, Market, Silahçı ve İllegal Market panellerini kurar.")
+        data = _get_raw_data()
+        data.setdefault("panel_messages", {})["ekonomi_yetkili"] = msg.id
+        _save_raw_data(data)
+
+        await interaction.followup.send(f"✅ Ekonomi Yetkili Paneli {kanal.mention} kanalına başarıyla kuruldu!", ephemeral=True)
+
+    @app_commands.command(name="market-panelleri-kur", description="ATM, Market, Silahçı, İllegal Market ve Ekonomi panellerini kurar.")
     async def cmd_market_panelleri_kur(self, interaction: discord.Interaction):
         if not yetkili_mi(interaction.user):
             return await interaction.response.send_message("❌ Bu işlem için yetkiniz bulunmamaktadır.", ephemeral=True)
@@ -981,6 +1574,25 @@ class EnvanterSistemi(commands.Cog):
             log_rapor.append("✅ İllegal Market Paneli kuruldu.")
         else:
             log_rapor.append("⚠️ İllegal Market Kanalı bulunamadı!")
+
+        # 5. Ekonomi Yetkili Paneli Kanalı
+        eko_kanal = guild.get_channel(EKONOMI_PANEL_KANAL_ID)
+        if eko_kanal:
+            try:
+                await eko_kanal.purge(limit=10)
+            except Exception:
+                pass
+            has_file = os.path.exists(EKONOMI_LOGO_PATH)
+            eko_embed = olustur_ekonomi_yetkili_embed(has_attachment=has_file)
+            if has_file:
+                file = discord.File(EKONOMI_LOGO_PATH, filename="ekonomi_panel_logo.jpg")
+                msg = await eko_kanal.send(embed=eko_embed, file=file, view=EkonomiYetkiliPanelView())
+            else:
+                msg = await eko_kanal.send(embed=eko_embed, view=EkonomiYetkiliPanelView())
+            p_msgs["ekonomi_yetkili"] = msg.id
+            log_rapor.append("✅ PRP Ekonomi Yetkili Paneli kuruldu.")
+        else:
+            log_rapor.append("⚠️ Ekonomi Yetkili Paneli Kanalı bulunamadı!")
 
         _save_raw_data(data)
         await interaction.followup.send("\n".join(log_rapor), ephemeral=True)
