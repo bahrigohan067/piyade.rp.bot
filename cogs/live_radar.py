@@ -149,6 +149,7 @@ class LiveRadar(commands.Cog):
         self.bot = bot
         self.session = None  # Kalıcı ClientSession (Socket sızıntılarını önler)
         self.son_konumlar = {}  # Katil takibi ve son bilinen konumlar
+        self.aktif_oyuncular = {}  # Anlık çevrimiçi oyuncular ve konumları
         self.last_radar_state = None  # Dirty-checking için son durum önbelleği
 
         # Kalıcı dashboard mesaj kimliği
@@ -283,6 +284,7 @@ class LiveRadar(commands.Cog):
                 "building": bina
             }
 
+        self.aktif_oyuncular = aktif_oyuncular
         self.son_konumlar.update(aktif_oyuncular)
 
         # 3. Dirty Checking: Oyuncu durumunda değişiklik yoksa Discord edit isteği atma (0 Rate Limit!)

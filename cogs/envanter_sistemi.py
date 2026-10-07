@@ -3,6 +3,7 @@ from discord.ext import commands
 from discord import app_commands
 import os
 import asyncio
+import math
 from datetime import datetime, timezone, timedelta
 from utils.storage import load_json, save_json_atomic
 
@@ -25,6 +26,7 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(BASE_DIR, "data")
 ENVANTER_FILE = os.path.join(DATA_DIR, "envanter_verileri.json")
 KAYIT_FILE = os.path.join(DATA_DIR, "kayit_data.json")
+ATM_FILE = os.path.join(DATA_DIR, "atm_noktalari.json")
 
 # =====================================================================
 # EŞYA VE FİYAT TANIMLARI
@@ -113,6 +115,127 @@ def yetkili_mi(member: discord.Member) -> bool:
     return any(r.id in [EKONOMI_YETKILISI_ROL_ID, KURUCU_ROL_ID] for r in member.roles)
 
 # =====================================================================
+# ATM KONUM VE MESAFE FONKSİYONLARI
+# =====================================================================
+VARSAYILAN_ATMLER = [
+    {"id": 1, "name": "1. ATM (City Spawn)", "x": 1469.2, "z": 4024.4, "postal": "210", "street": "City Spawn Yakını", "detay": "1. ATM"},
+    {"id": 2, "name": "2. ATM (Cadde)", "x": 1523.5, "z": 4218.3, "postal": "-", "street": "Cadde", "detay": "2. ATM"},
+    {"id": 3, "name": "3. ATM (Banka İçi Sol)", "x": 1274.1, "z": 3718.9, "postal": "213", "street": "RoadAlignmentIndicator_Left (No: 2132)", "detay": "3. ATM | Banka İçi"},
+    {"id": 4, "name": "4. ATM (Banka İçi Orta)", "x": 1270.6, "z": 3718.9, "postal": "213", "street": "RoadAlignmentIndicator_Left (No: 2132)", "detay": "4. ATM | Banka İçi"},
+    {"id": 5, "name": "5. ATM (Banka İçi Sağ)", "x": 1277.4, "z": 3719.1, "postal": "213", "street": "RoadAlignmentIndicator_Left (No: 2132)", "detay": "5. ATM | Banka İçi"},
+    {"id": 6, "name": "6. ATM (Posta 216)", "x": 1719.3, "z": 3722.3, "postal": "216", "street": "CurbRight (No: 2164)", "detay": "6. ATM"},
+    {"id": 7, "name": "7. ATM (Posta 230)", "x": 1628.5, "z": 3331.5, "postal": "230", "street": "CurbRight (No: 2302)", "detay": "7. ATM"},
+    {"id": 8, "name": "8. ATM (Posta 218)", "x": 2100.6, "z": 3720.4, "postal": "218", "street": "Road (No: 2181)", "detay": "8. ATM"},
+    {"id": 9, "name": "9. ATM (Posta 308)", "x": 3292.3, "z": 3738.2, "postal": "308", "street": "Road (No: 3081)", "detay": "9. ATM"},
+    {"id": 10, "name": "10. ATM (Posta 313)", "x": 3354.9, "z": 3618.7, "postal": "313", "street": "Road (No: 3131)", "detay": "10. ATM"},
+    {"id": 11, "name": "11. ATM (Posta 317)", "x": 3006.5, "z": 3488.3, "postal": "317", "street": "Road (No: 3171)", "detay": "11. ATM"},
+    {"id": 12, "name": "12. ATM (Posta 322)", "x": 3005.0, "z": 3322.1, "postal": "322", "street": "Road (No: 3221)", "detay": "12. ATM"},
+    {"id": 13, "name": "13. ATM (Posta 1102)", "x": 3994.8, "z": 1463.0, "postal": "1102", "street": "RoadAlignmentIndicator_Left (No: 11021)", "detay": "13. ATM"},
+    {"id": 14, "name": "14. ATM (Posta 1105 Kuzey)", "x": 4047.3, "z": 1290.0, "postal": "1105", "street": "CurbLeft (No: 11051)", "detay": "14. ATM"},
+    {"id": 15, "name": "15. ATM (Posta 1105 Güney)", "x": 4019.7, "z": 1213.9, "postal": "1105", "street": "CurbLeft (No: 11052)", "detay": "15. ATM"},
+    {"id": 16, "name": "16. ATM (Posta 704)", "x": 2784.4, "z": 1747.2, "postal": "704", "street": "CollisionPart_Road (No: 7042)", "detay": "16. ATM"},
+    {"id": 17, "name": "17. ATM (Posta 802)", "x": 1346.5, "z": 1104.0, "postal": "802", "street": "RoadAlignmentIndicator_Left (No: 8022)", "detay": "17. ATM"}
+]
+
+def get_atm_noktalari() -> list[dict]:
+    """data/atm_noktalari.json dosyasından ATM koordinatlarını çeker."""
+    data = load_json(ATM_FILE, {})
+    if isinstance(data, dict) and "atmler" in data:
+        return data.get("atmler", [])
+    if isinstance(data, list):
+        return data
+    return VARSAYILAN_ATMLER
+
+def mesafe_hesapla(x1: float, z1: float, x2: float, z2: float) -> float:
+    """İki koordinat arasındaki 2D Öklid mesafesini hesaplar."""
+    return math.sqrt((float(x1) - float(x2)) ** 2 + (float(z1) - float(z2)) ** 2)
+
+def en_yakin_atm(x: float, z: float) -> tuple[dict | None, float]:
+    """Verilen (x, z) koordinatlarına en yakın ATM'yi ve mesafesini döndürür."""
+    atmler = get_atm_noktalari()
+    if not atmler:
+        return None, 999999.0
+    en_yakin = None
+    min_dist = float("inf")
+    for atm in atmler:
+        try:
+            d = mesafe_hesapla(x, z, atm["x"], atm["z"])
+            if d < min_dist:
+                min_dist = d
+                en_yakin = atm
+        except Exception:
+            continue
+    return en_yakin, min_dist
+
+def discord_to_roblox(discord_user_id: int | str, member_display_name: str = "") -> tuple[str | None, str | None]:
+    """Discord ID veya kullanıcı adından Roblox kullanıcı adı ve ID'sini bulur."""
+    kayit_data = load_json(KAYIT_FILE, {})
+    user_info = kayit_data.get("kullanicilar", {}).get(str(discord_user_id))
+    if user_info:
+        return user_info.get("roblox_ad"), str(user_info.get("roblox_id") or "")
+    
+    # Kullanıcılar içinde eşleştirme
+    for uid, udata in kayit_data.get("kullanicilar", {}).items():
+        if str(uid) == str(discord_user_id):
+            return udata.get("roblox_ad"), str(udata.get("roblox_id") or "")
+            
+    return None, None
+
+def kullanici_atm_kontrol(bot: commands.Bot, member: discord.Member) -> tuple[bool, str, dict | None, float | None, dict | None]:
+    """
+    Kullanıcının ER:LC oyununda bir ATM'nin yakınında olup olmadığını denetler.
+    Dönüş: (uygun_mu, durum_kodu, en_yakin_atm, mesafe, oyuncu_konumu)
+    """
+    roblox_ad, roblox_id = discord_to_roblox(member.id, getattr(member, "display_name", ""))
+    
+    radar_cog = bot.get_cog("LiveRadar")
+    if not radar_cog:
+        return False, "radar_yok", None, None, None
+
+    aktif_oyuncular = getattr(radar_cog, "aktif_oyuncular", {}) or {}
+
+    oyuncu_konum = None
+    
+    # 1. Önce anlık aktif oyuncular tablosundan ara
+    if roblox_ad and roblox_ad in aktif_oyuncular:
+        oyuncu_konum = aktif_oyuncular[roblox_ad]
+    elif roblox_ad:
+        for p_name, p_loc in aktif_oyuncular.items():
+            if p_name.lower() == roblox_ad.lower():
+                oyuncu_konum = p_loc
+                break
+
+    # 2. Eğer eşleşmediyse Discord display_name üzerinden ara (örn. 'BGP2008 | Ahmet')
+    if not oyuncu_konum and getattr(member, "display_name", ""):
+        disp = member.display_name.lower()
+        for p_name, p_loc in aktif_oyuncular.items():
+            if p_name.lower() in disp or disp in p_name.lower():
+                oyuncu_konum = p_loc
+                break
+
+    if not oyuncu_konum:
+        if not roblox_ad:
+            return False, "kayit_yok", None, None, None
+        return False, "oyunda_degil", None, None, None
+
+    px = oyuncu_konum.get("x")
+    pz = oyuncu_konum.get("z")
+    if not isinstance(px, (int, float)) or not isinstance(pz, (int, float)):
+        return False, "konum_gecersiz", None, None, oyuncu_konum
+
+    atm_data = load_json(ATM_FILE, {})
+    max_mesafe = atm_data.get("maksimum_mesafe", 30.0) if isinstance(atm_data, dict) else 30.0
+
+    en_yakin, mesafe = en_yakin_atm(px, pz)
+    if not en_yakin:
+        return False, "atm_yok", None, None, oyuncu_konum
+
+    if mesafe <= max_mesafe:
+        return True, "basarili", en_yakin, mesafe, oyuncu_konum
+    else:
+        return False, "uzakta", en_yakin, mesafe, oyuncu_konum
+
+# =====================================================================
 # ATM MODALLARI VE GÖRÜNÜMÜ
 # =====================================================================
 class ATMYatirModal(discord.ui.Modal, title="🏧 ATM • Para Yatırma"):
@@ -199,10 +322,86 @@ class ATMView(discord.ui.View):
 
     @discord.ui.button(label="Para Yatır", emoji="📥", style=discord.ButtonStyle.success, custom_id="atm_btn_yatir")
     async def yatir_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        uygun, durum, en_yakin, mesafe, p_loc = kullanici_atm_kontrol(interaction.client, interaction.user)
+        
+        if not uygun and not yetkili_mi(interaction.user):
+            if durum == "kayit_yok":
+                return await interaction.response.send_message(
+                    "❌ **Kayıtlı Roblox Hesabı Bulunamadı!**\n"
+                    "ATM terminalini kullanabilmek için Discord hesabınızın onaylı bir Roblox hesabı ile eşleşmiş olması gerekir.\n"
+                    "Lütfen önce sunucuda kayıt olunuz.",
+                    ephemeral=True
+                )
+            elif durum == "oyunda_degil":
+                roblox_ad, _ = discord_to_roblox(interaction.user.id, interaction.user.display_name)
+                return await interaction.response.send_message(
+                    f"❌ **ER:LC Sunucusunda Aktif Değilsiniz!**\n"
+                    f"ATM terminalinden para yatırmak için oyunda aktif olmalı ve bir ATM cihazının hemen yanında durmalısınız.\n"
+                    f"🎮 **Kayıtlı Roblox Hesabı:** `{roblox_ad or 'Bilinmiyor'}`",
+                    ephemeral=True
+                )
+            elif durum == "uzakta" and en_yakin and p_loc:
+                px = p_loc.get("x", "-")
+                pz = p_loc.get("z", "-")
+                posta = p_loc.get("postal", "-")
+                sokak = p_loc.get("street", "-")
+                return await interaction.response.send_message(
+                    f"❌ **Bir ATM Cihazının Yanında Değilsiniz!**\n"
+                    f"Bankacılık işlemlerini gerçekleştirebilmek için bir ATM cihazının hemen yanında durmalısınız.\n\n"
+                    f"📍 **Mevcut Konumunuz:** X: `{px}` | Z: `{pz}` (Posta: `{posta}` • {sokak})\n"
+                    f"🏧 **En Yakın ATM:** **{en_yakin['name']}** (Posta: `{en_yakin['postal']}`)\n"
+                    f"📏 **Mesafe:** `{int(mesafe)} metre` *(İzin verilen azami mesafe: 30 metre)*\n"
+                    f"🛣️ **Adres / Detay:** `{en_yakin['street']} • {en_yakin['detay']}`",
+                    ephemeral=True
+                )
+            else:
+                return await interaction.response.send_message(
+                    "❌ Konum doğrulaması yapılamadı veya oyun radar verisi henüz güncellenmedi. Lütfen birkaç saniye sonra tekrar deneyiniz.",
+                    ephemeral=True
+                )
+
         await interaction.response.send_modal(ATMYatirModal())
 
     @discord.ui.button(label="Para Çek", emoji="📤", style=discord.ButtonStyle.primary, custom_id="atm_btn_cek")
     async def cek_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        uygun, durum, en_yakin, mesafe, p_loc = kullanici_atm_kontrol(interaction.client, interaction.user)
+        
+        if not uygun and not yetkili_mi(interaction.user):
+            if durum == "kayit_yok":
+                return await interaction.response.send_message(
+                    "❌ **Kayıtlı Roblox Hesabı Bulunamadı!**\n"
+                    "ATM terminalini kullanabilmek için Discord hesabınızın onaylı bir Roblox hesabı ile eşleşmiş olması gerekir.\n"
+                    "Lütfen önce sunucuda kayıt olunuz.",
+                    ephemeral=True
+                )
+            elif durum == "oyunda_degil":
+                roblox_ad, _ = discord_to_roblox(interaction.user.id, interaction.user.display_name)
+                return await interaction.response.send_message(
+                    f"❌ **ER:LC Sunucusunda Aktif Değilsiniz!**\n"
+                    f"ATM terminalinden para çekmek için oyunda aktif olmalı ve bir ATM cihazının hemen yanında durmalısınız.\n"
+                    f"🎮 **Kayıtlı Roblox Hesabı:** `{roblox_ad or 'Bilinmiyor'}`",
+                    ephemeral=True
+                )
+            elif durum == "uzakta" and en_yakin and p_loc:
+                px = p_loc.get("x", "-")
+                pz = p_loc.get("z", "-")
+                posta = p_loc.get("postal", "-")
+                sokak = p_loc.get("street", "-")
+                return await interaction.response.send_message(
+                    f"❌ **Bir ATM Cihazının Yanında Değilsiniz!**\n"
+                    f"Bankacılık işlemlerini gerçekleştirebilmek için bir ATM cihazının hemen yanında durmalısınız.\n\n"
+                    f"📍 **Mevcut Konumunuz:** X: `{px}` | Z: `{pz}` (Posta: `{posta}` • {sokak})\n"
+                    f"🏧 **En Yakın ATM:** **{en_yakin['name']}** (Posta: `{en_yakin['postal']}`)\n"
+                    f"📏 **Mesafe:** `{int(mesafe)} metre` *(İzin verilen azami mesafe: 30 metre)*\n"
+                    f"🛣️ **Adres / Detay:** `{en_yakin['street']} • {en_yakin['detay']}`",
+                    ephemeral=True
+                )
+            else:
+                return await interaction.response.send_message(
+                    "❌ Konum doğrulaması yapılamadı veya oyun radar verisi henüz güncellenmedi. Lütfen birkaç saniye sonra tekrar deneyiniz.",
+                    ephemeral=True
+                )
+
         await interaction.response.send_modal(ATMCekModal())
 
     @discord.ui.button(label="Hesap Özeti", emoji="💳", style=discord.ButtonStyle.secondary, custom_id="atm_btn_bakiye")
@@ -217,7 +416,7 @@ class ATMView(discord.ui.View):
         embed.add_field(name="💵 Nakit Cüzdan", value=f"**{format_usd(user['cash'])}**", inline=True)
         embed.add_field(name="🏦 Banka Hesabı", value=f"**{format_usd(user['bank'])}**", inline=True)
         embed.add_field(name="💰 Toplam Varlık", value=f"**{format_usd(user['cash'] + user['bank'])}**", inline=False)
-        embed.set_footer(text="Gizli Mesaj • Yalnızca siz görebilirsiniz")
+        embed.set_footer(text="Gizli Mesaj • Para yatırma ve çekme için bir ATM cihazının yanında olmalısınız")
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
 # =====================================================================
@@ -654,8 +853,10 @@ class EnvanterSistemi(commands.Cog):
                 description=(
                     "Pacific Bankası 7/24 kesintisiz ATM terminaline hoş geldiniz.\n"
                     "Para yatırma ve para çekme işlemlerinizi aşağıdaki butonlarla yapabilirsiniz.\n\n"
-                    "⚠️ **ÖNEMLİ KURAL:**\n"
-                    "Bu paneli yalnızca oyun içerisinde bir **ATM noktasının** yanındayken kullanabilirsiniz.\n"
+                    "⚠️ **ÖNEMLİ KURAL & KOORDİNAT DOĞRULAMASI:**\n"
+                    "• Para yatırma ve para çekme işlemleri için **ER:LC oyununda bir ATM cihazının hemen yanında (azami 30 metre)** duruyor olmalısınız!\n"
+                    "• Şehir genelinde haritada tanımlanmış **17 adet aktif ATM noktası** bulunmaktadır.\n"
+                    "• Canlı radar sistemi oyun içindeki konumunuzu anlık olarak doğrular.\n"
                     "──────────────────────────────────────────"
                 ),
                 color=discord.Color.blue()
@@ -853,6 +1054,50 @@ class EnvanterSistemi(commands.Cog):
             f"Kullanıcının Envanterindeki Toplam: `{user['inventory'][eslesen_esya]} adet`",
             ephemeral=True
         )
+
+    @app_commands.command(name="atm-mesafe", description="ER:LC oyununda size en yakın ATM noktasını ve mesafenizi gösterir.")
+    @app_commands.describe(kullanici="Mesafe kontrolü yapılacak üye (Varsayılan: siz)")
+    async def cmd_atm_mesafe(self, interaction: discord.Interaction, kullanici: discord.Member = None):
+        hedef = kullanici or interaction.user
+        uygun, durum, en_yakin, mesafe, p_loc = kullanici_atm_kontrol(self.bot, hedef)
+        
+        if durum == "kayit_yok":
+            return await interaction.response.send_message(
+                f"❌ {hedef.mention} için onaylı bir Roblox hesabı bulunamadı. Lütfen önce sunucuda kayıt olunuz.",
+                ephemeral=True
+            )
+        if durum == "oyunda_degil":
+            roblox_ad, _ = discord_to_roblox(hedef.id, hedef.display_name)
+            return await interaction.response.send_message(
+                f"❌ {hedef.mention} şu anda ER:LC sunucusunda aktif değil! (Roblox: `{roblox_ad or 'Bilinmiyor'}`)",
+                ephemeral=True
+            )
+        if not en_yakin or not p_loc:
+            return await interaction.response.send_message(
+                "❌ Konum doğrulaması yapılamadı veya oyun radar verisi henüz güncellenmedi.",
+                ephemeral=True
+            )
+
+        px = p_loc.get("x", "-")
+        pz = p_loc.get("z", "-")
+        posta = p_loc.get("postal", "-")
+        sokak = p_loc.get("street", "-")
+        
+        durum_metin = "🟢 **ATM İşlem Alanındasınız! (Kullanabilirsiniz)**" if uygun else "🔴 **ATM Alanı Dışındasınız! (Çok Uzak)**"
+        
+        embed = discord.Embed(
+            title=f"🏧 CANLI ATM MESAFE ANALİZİ • {hedef.display_name}",
+            color=discord.Color.green() if uygun else discord.Color.orange(),
+            timestamp=datetime.now(timezone.utc)
+        )
+        embed.set_thumbnail(url=hedef.display_avatar.url)
+        embed.add_field(name="📍 Oyun İçi Konumunuz", value=f"X: `{px}` | Z: `{pz}`\nPosta: `{posta}` ({sokak})", inline=True)
+        embed.add_field(name="🏧 En Yakın ATM", value=f"**{en_yakin['name']}**\nPosta: `{en_yakin['postal']}`", inline=True)
+        embed.add_field(name="📏 Mesafe", value=f"**{int(mesafe)} metre**\n*(İzin Verilen: 30 metre)*", inline=True)
+        embed.add_field(name="🛣️ ATM Adresi & Detayı", value=f"`{en_yakin['street']} • {en_yakin['detay']}`", inline=False)
+        embed.add_field(name="📊 Terminal Durumu", value=durum_metin, inline=False)
+        embed.set_footer(text="Piyade RP • Canlı GPS & ATM Doğrulama Ağı")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 async def setup(bot: commands.Bot):
