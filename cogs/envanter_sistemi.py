@@ -21,6 +21,7 @@ MARKET_KANAL_ID = 1557055691405926400
 SILAHCI_KANAL_ID = 1557055717389901894
 ILLEGAL_MARKET_KANAL_ID = 1557056451644629032
 EKONOMI_PANEL_KANAL_ID = 1557403029639008277
+EKONOMI_LOG_KANAL_ID = 1557420058387546112
 ESK_LOG_KANAL_ID = 1557045447808520393
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -122,6 +123,17 @@ def yetkili_mi(member: discord.Member) -> bool:
     if member.guild_permissions.administrator:
         return True
     return any(r.id in [EKONOMI_YETKILISI_ROL_ID, KURUCU_ROL_ID] for r in member.roles)
+
+async def ekonomi_log_gonder(guild: discord.Guild, embed: discord.Embed):
+    """Ekonomi denetim kanalına (1557420058387546112) detaylı işlem logu gönderir."""
+    if not guild:
+        return
+    log_kanal = guild.get_channel(EKONOMI_LOG_KANAL_ID)
+    if log_kanal:
+        try:
+            await log_kanal.send(embed=embed)
+        except Exception as e:
+            print(f"[EKONOMI LOG HATA] {e}", flush=True)
 
 # =====================================================================
 # ATM KONUM VE MESAFE FONKSİYONLARI
@@ -764,6 +776,22 @@ class EsyaEkleModal(discord.ui.Modal):
         embed.set_footer(text="Piyade RP • Ekonomi Yönetim Sistemi")
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
+        # 1557420058387546112 Detaylı Denetim Logu
+        log_embed = discord.Embed(
+            title="📋 EKONOMİ DENETİM LOGU • EŞYA EKLENDİ",
+            color=discord.Color.green(),
+            timestamp=datetime.now(timezone.utc)
+        )
+        if hasattr(self.member, "display_avatar"):
+            log_embed.set_thumbnail(url=self.member.display_avatar.url)
+        log_embed.add_field(name="👮 Yetkili", value=f"{interaction.user.mention}\n`{interaction.user.name}` (`{interaction.user.id}`)", inline=True)
+        log_embed.add_field(name="👤 Hedef Üye", value=f"{self.member.mention}\n`{getattr(self.member, 'name', 'Bilinmiyor')}` (`{self.member.id}`)", inline=True)
+        log_embed.add_field(name="📦 Eşya / Silah", value=f"**{self.esya_adi}**", inline=False)
+        log_embed.add_field(name="🔢 Eklenen Adet", value=f"`+{adet_val} adet`", inline=True)
+        log_embed.add_field(name="📊 Güncel Envanter", value=f"`{user['inventory'][self.esya_adi]} adet`", inline=True)
+        log_embed.set_footer(text=f"Piyade RP Denetim Ağı • Yetkili: {interaction.user.name}", icon_url=interaction.user.display_avatar.url if hasattr(interaction.user, "display_avatar") else None)
+        await ekonomi_log_gonder(interaction.guild, log_embed)
+
 
 class EsyaEkleSelectView(discord.ui.View):
     def __init__(self):
@@ -882,6 +910,22 @@ class EsyaSilModal(discord.ui.Modal):
         embed.set_footer(text="Piyade RP • Ekonomi Yönetim Sistemi")
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
+        # 1557420058387546112 Detaylı Denetim Logu
+        log_embed = discord.Embed(
+            title="📋 EKONOMİ DENETİM LOGU • EŞYA SİLİNDİ",
+            color=discord.Color.red(),
+            timestamp=datetime.now(timezone.utc)
+        )
+        if hasattr(self.member, "display_avatar"):
+            log_embed.set_thumbnail(url=self.member.display_avatar.url)
+        log_embed.add_field(name="👮 Yetkili", value=f"{interaction.user.mention}\n`{interaction.user.name}` (`{interaction.user.id}`)", inline=True)
+        log_embed.add_field(name="👤 Hedef Üye", value=f"{self.member.mention}\n`{getattr(self.member, 'name', 'Bilinmiyor')}` (`{self.member.id}`)", inline=True)
+        log_embed.add_field(name="📦 Eşya / Silah", value=f"**{self.esya_adi}**", inline=False)
+        log_embed.add_field(name="🔢 Silinen Adet", value=f"`-{silinen} adet`", inline=True)
+        log_embed.add_field(name="📊 Kalan Envanter", value=f"`{kalan} adet`", inline=True)
+        log_embed.set_footer(text=f"Piyade RP Denetim Ağı • Yetkili: {interaction.user.name}", icon_url=interaction.user.display_avatar.url if hasattr(interaction.user, "display_avatar") else None)
+        await ekonomi_log_gonder(interaction.guild, log_embed)
+
 
 class EsyaSilSelectView(discord.ui.View):
     def __init__(self):
@@ -983,6 +1027,23 @@ class ParaEkleModal(discord.ui.Modal):
         embed.set_footer(text="Piyade RP • Ekonomi Yönetim Sistemi")
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
+        # 1557420058387546112 Detaylı Denetim Logu
+        log_embed = discord.Embed(
+            title="📋 EKONOMİ DENETİM LOGU • NAKİT PARA EKLENDİ",
+            color=discord.Color.green(),
+            timestamp=datetime.now(timezone.utc)
+        )
+        if hasattr(self.member, "display_avatar"):
+            log_embed.set_thumbnail(url=self.member.display_avatar.url)
+        log_embed.add_field(name="👮 Yetkili", value=f"{interaction.user.mention}\n`{interaction.user.name}` (`{interaction.user.id}`)", inline=True)
+        log_embed.add_field(name="👤 Hedef Üye", value=f"{self.member.mention}\n`{getattr(self.member, 'name', 'Bilinmiyor')}` (`{self.member.id}`)", inline=True)
+        log_embed.add_field(name="💵 Eklenen Tutar", value=f"`+{format_usd(miktar_val)}` (Nakit)", inline=False)
+        log_embed.add_field(name="💰 Güncel Cüzdan (Nakit)", value=f"**{format_usd(user['cash'])}**", inline=True)
+        log_embed.add_field(name="💳 Banka Hesabı", value=f"**{format_usd(user.get('bank', 0))}**", inline=True)
+        log_embed.add_field(name="📈 Toplam Servet", value=f"**{format_usd(user['cash'] + user.get('bank', 0))}**", inline=True)
+        log_embed.set_footer(text=f"Piyade RP Denetim Ağı • Yetkili: {interaction.user.name}", icon_url=interaction.user.display_avatar.url if hasattr(interaction.user, "display_avatar") else None)
+        await ekonomi_log_gonder(interaction.guild, log_embed)
+
 
 class ParaEkleSelectView(discord.ui.View):
     def __init__(self):
@@ -1072,6 +1133,23 @@ class ParaSilModal(discord.ui.Modal):
         )
         embed.set_footer(text="Piyade RP • Ekonomi Yönetim Sistemi")
         await interaction.response.send_message(embed=embed, ephemeral=True)
+
+        # 1557420058387546112 Detaylı Denetim Logu
+        log_embed = discord.Embed(
+            title="📋 EKONOMİ DENETİM LOGU • NAKİT PARA SİLİNDİ",
+            color=discord.Color.red(),
+            timestamp=datetime.now(timezone.utc)
+        )
+        if hasattr(self.member, "display_avatar"):
+            log_embed.set_thumbnail(url=self.member.display_avatar.url)
+        log_embed.add_field(name="👮 Yetkili", value=f"{interaction.user.mention}\n`{interaction.user.name}` (`{interaction.user.id}`)", inline=True)
+        log_embed.add_field(name="👤 Hedef Üye", value=f"{self.member.mention}\n`{getattr(self.member, 'name', 'Bilinmiyor')}` (`{self.member.id}`)", inline=True)
+        log_embed.add_field(name="💸 Silinen Tutar", value=f"`-{format_usd(silinen)}` (Nakit)", inline=False)
+        log_embed.add_field(name="💰 Kalan Cüzdan (Nakit)", value=f"**{format_usd(user['cash'])}**", inline=True)
+        log_embed.add_field(name="💳 Banka Hesabı", value=f"**{format_usd(user.get('bank', 0))}**", inline=True)
+        log_embed.add_field(name="📈 Toplam Servet", value=f"**{format_usd(user['cash'] + user.get('bank', 0))}**", inline=True)
+        log_embed.set_footer(text=f"Piyade RP Denetim Ağı • Yetkili: {interaction.user.name}", icon_url=interaction.user.display_avatar.url if hasattr(interaction.user, "display_avatar") else None)
+        await ekonomi_log_gonder(interaction.guild, log_embed)
 
 
 class ParaSilSelectView(discord.ui.View):
@@ -1241,6 +1319,21 @@ class EkonomiYetkiliPanelView(discord.ui.View):
         )
         embed.set_footer(text="Piyade RP • Ammu-Nation Tedarik Zinciri")
         await interaction.response.send_message(embed=embed, ephemeral=True)
+
+        # 1557420058387546112 Detaylı Denetim Logu
+        log_embed = discord.Embed(
+            title="📋 EKONOMİ DENETİM LOGU • SİLAH STOKLARI YENİLENDİ",
+            color=discord.Color.gold(),
+            timestamp=datetime.now(timezone.utc)
+        )
+        if hasattr(interaction.user, "display_avatar"):
+            log_embed.set_thumbnail(url=interaction.user.display_avatar.url)
+        log_embed.add_field(name="👮 Yetkili", value=f"{interaction.user.mention}\n`{interaction.user.name}` (`{interaction.user.id}`)", inline=False)
+        log_embed.add_field(name="🔫 Beretta 92 Tedariği", value=f"`+50 Adet` (Yeni Stok: **{stoklar['Beretta 92']}**)", inline=True)
+        log_embed.add_field(name="🔫 Colt 1911 Tedariği", value=f"`+50 Adet` (Yeni Stok: **{stoklar['Colt 1911']}**)", inline=True)
+        log_embed.add_field(name="🏪 Mağaza", value="`Ammu-Nation Gunshop`", inline=True)
+        log_embed.set_footer(text=f"Piyade RP Denetim Ağı • Stok İkmali: {interaction.user.name}", icon_url=interaction.user.display_avatar.url if hasattr(interaction.user, "display_avatar") else None)
+        await ekonomi_log_gonder(interaction.guild, log_embed)
 
 
 # =====================================================================
@@ -1628,6 +1721,21 @@ class EnvanterSistemi(commands.Cog):
             ephemeral=True
         )
 
+        # 1557420058387546112 Detaylı Denetim Logu
+        log_embed = discord.Embed(
+            title=f"📋 EKONOMİ DENETİM LOGU • BAKİYE TANIMLANDI ({tur.name.upper()})",
+            color=discord.Color.green(),
+            timestamp=datetime.now(timezone.utc)
+        )
+        if hasattr(kullanici, "display_avatar"):
+            log_embed.set_thumbnail(url=kullanici.display_avatar.url)
+        log_embed.add_field(name="👮 Yetkili", value=f"{interaction.user.mention}\n`{interaction.user.name}` (`{interaction.user.id}`)", inline=True)
+        log_embed.add_field(name="👤 Hedef Üye", value=f"{kullanici.mention}\n`{kullanici.name}` (`{kullanici.id}`)", inline=True)
+        log_embed.add_field(name="💵 Eklenen Tutar", value=f"`+{format_usd(miktar)}` ({tur.name})", inline=False)
+        log_embed.add_field(name="💰 Güncel Bakiye", value=f"**{format_usd(user[tur.value])}**", inline=True)
+        log_embed.set_footer(text=f"Piyade RP Denetim Ağı • Komut: /bakiye-ver • Yetkili: {interaction.user.name}", icon_url=interaction.user.display_avatar.url if hasattr(interaction.user, "display_avatar") else None)
+        await ekonomi_log_gonder(interaction.guild, log_embed)
+
     @app_commands.command(name="esya-ver", description="Bir kullanıcıya envanter eşyası veya silah verir.")
     @app_commands.describe(
         kullanici="Eşya verilecek üye",
@@ -1666,6 +1774,22 @@ class EnvanterSistemi(commands.Cog):
             f"Kullanıcının Envanterindeki Toplam: `{user['inventory'][eslesen_esya]} adet`",
             ephemeral=True
         )
+
+        # 1557420058387546112 Detaylı Denetim Logu
+        log_embed = discord.Embed(
+            title="📋 EKONOMİ DENETİM LOGU • EŞYA TANIMLANDI",
+            color=discord.Color.green(),
+            timestamp=datetime.now(timezone.utc)
+        )
+        if hasattr(kullanici, "display_avatar"):
+            log_embed.set_thumbnail(url=kullanici.display_avatar.url)
+        log_embed.add_field(name="👮 Yetkili", value=f"{interaction.user.mention}\n`{interaction.user.name}` (`{interaction.user.id}`)", inline=True)
+        log_embed.add_field(name="👤 Hedef Üye", value=f"{kullanici.mention}\n`{kullanici.name}` (`{kullanici.id}`)", inline=True)
+        log_embed.add_field(name="📦 Eşya / Silah", value=f"**{eslesen_esya}**", inline=False)
+        log_embed.add_field(name="🔢 Eklenen Miktar", value=f"`+{adet} adet`", inline=True)
+        log_embed.add_field(name="📊 Toplam Miktar", value=f"`{user['inventory'][eslesen_esya]} adet`", inline=True)
+        log_embed.set_footer(text=f"Piyade RP Denetim Ağı • Komut: /esya-ver • Yetkili: {interaction.user.name}", icon_url=interaction.user.display_avatar.url if hasattr(interaction.user, "display_avatar") else None)
+        await ekonomi_log_gonder(interaction.guild, log_embed)
 
     @app_commands.command(name="atm-mesafe", description="ER:LC oyununda size en yakın ATM noktasını ve mesafenizi gösterir.")
     @app_commands.describe(kullanici="Mesafe kontrolü yapılacak üye (Varsayılan: siz)")
