@@ -1736,60 +1736,247 @@ class EnvanterSistemi(commands.Cog):
         log_embed.set_footer(text=f"Piyade RP Denetim Ağı • Komut: /bakiye-ver • Yetkili: {interaction.user.name}", icon_url=interaction.user.display_avatar.url if hasattr(interaction.user, "display_avatar") else None)
         await ekonomi_log_gonder(interaction.guild, log_embed)
 
-    @app_commands.command(name="esya-ver", description="Bir kullanıcıya envanter eşyası veya silah verir.")
-    @app_commands.describe(
-        kullanici="Eşya verilecek üye",
-        esya_adi="Verilecek eşya/silah adı",
-        adet="Verilecek miktar"
-    )
-    async def cmd_esya_ver(self, interaction: discord.Interaction, kullanici: discord.Member, esya_adi: str, adet: int = 1):
-        if not yetkili_mi(interaction.user):
-            return await interaction.response.send_message("❌ Bu komutu yalnızca Ekonomi Yetkilileri kullanabilir!", ephemeral=True)
+# ── Oyuncu Eşya Transfer Modal & View ──
+class EsyaGonderModal(discord.ui.Modal):
+    def __init__(self, sender: discord.Member, target: discord.Member, esya_adi: str, max_adet: int, is_yetkili_tanim: bool = False):
+        super().__init__(title=f"Eşya Gönder: {esya_adi[:18]}")
+        self.sender = sender
+        self.target = target
+        self.esya_adi = esya_adi
+        self.max_adet = max_adet
+        self.is_yetkili_tanim = is_yetkili_tanim
 
-        if adet <= 0:
-            return await interaction.response.send_message("❌ Adet pozitif bir sayı olmalıdır!", ephemeral=True)
+        placeholder_text = f"Örn: 1 veya {min(max_adet, 5)} (Maksimum: {max_adet})" if not is_yetkili_tanim else "Örn: 1 veya 5 (Yetkili Tanımlama)"
+        self.adet = discord.ui.TextInput(
+            label="Gönderilecek Adet",
+            placeholder=placeholder_text,
+            min_length=1,
+            max_length=5,
+            required=True
+        )
+        self.add_item(self.adet)
 
-        # Geçerli eşya mı kontrolü
-        tum_esyalar = {**MARKET_ESYALARI, **ILLEGAL_ESYALAR, **SILAH_ESYALARI}
-        eslesen_esya = None
-        for item in tum_esyalar:
-            if item.lower() == esya_adi.strip().lower():
-                eslesen_esya = item
-                break
-
-        if not eslesen_esya:
-            esya_listesi = ", ".join(tum_esyalar.keys())
-            return await interaction.response.send_message(
-                f"❌ Geçersiz eşya adı! Geçerli eşyalar şunlardır:\n`{esya_listesi}`",
-                ephemeral=True
-            )
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            adet_val = int(self.adet.value.strip())
+            if adet_val <= 0:
+                raise ValueError
+        except ValueError:
+            return await interaction.response.send_message("❌ Geçerli ve pozitif bir sayı girmelisiniz!", ephemeral=True)
 
         async with _ENV_LOCK:
-            user = get_user_profile(kullanici.id)
-            user["inventory"][eslesen_esya] = user["inventory"].get(eslesen_esya, 0) + adet
-            update_user_profile(kullanici.id, user)
+            sender_user = get_user_profile(self.sender.id)
+            target_user = get_user_profile(self.target.id)
 
-        await interaction.response.send_message(
-            f"✅ {kullanici.mention} kullanıcısına **{adet}x {eslesen_esya}** verildi.\n"
-            f"Kullanıcının Envanterindeki Toplam: `{user['inventory'][eslesen_esya]} adet`",
-            ephemeral=True
+            if not self.is_yetkili_tanim:
+                mevcut = sender_user.get("inventory", {}).get(self.esya_adi, 0)
+                if mevcut < adet_val:
+                    return await interaction.response.send_message(
+                        f"❌ Yetersiz envanter stoğu! Envanterinizde yalnızca **{mevcut} adet** {self.esya_adi} bulunmaktadır.",
+                        ephemeral=True
+                    )
+
+                # Gönderenin envanterinden düş
+                yeni_gonderen_adet = mevcut - adet_val
+                if yeni_gonderen_adet <= 0:
+                    sender_user["inventory"].pop(self.esya_adi, None)
+                else:
+                    sender_user["inventory"][self.esya_adi] = yeni_gonderen_adet
+                update_user_profile(self.sender.id, sender_user)
+
+            # Alıcının envanterine ekle
+            target_user["inventory"][self.esya_adi] = target_user["inventory"].get(self.esya_adi, 0) + adet_val
+            update_user_profile(self.target.id, target_user)
+
+        kalan_bilgi = f"{sender_user['inventory'].get(self.esya_adi, 0)} adet" if not self.is_yetkili_tanim else "Sınırsız (Yetkili)"
+        embed = discord.Embed(
+            title="🎁 Eşya Başarıyla Gönderildi!",
+            color=0x2ECC71,
+            description=(
+                f"✅ {self.target.mention} kullanıcısına **{adet_val}x {self.esya_adi}** başarıyla teslim edildi!\n\n"
+                f"👤 **Alıcı:** {self.target.mention}\n"
+                f"📦 **Gönderilen:** `{self.esya_adi}` x{adet_val}\n"
+                f"📊 **Kalan Envanteriniz:** `{kalan_bilgi}`\n"
+                f"🎯 **Alıcının Güncel Toplamı:** `{target_user['inventory'][self.esya_adi]} adet`"
+            ),
+            timestamp=datetime.now(timezone.utc)
         )
+        if hasattr(self.target, "display_avatar"):
+            embed.set_thumbnail(url=self.target.display_avatar.url)
+        embed.set_footer(text="Piyade RP • Güvenli Eşya Transferi")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+        # Kanala rol yapma bilgilendirme mesajı gönder
+        try:
+            if interaction.channel:
+                await interaction.channel.send(
+                    f"🤝 {self.sender.mention}, {self.target.mention} kullanıcısına **{adet_val}x {self.esya_adi}** verdi."
+                )
+        except Exception:
+            pass
 
         # 1557420058387546112 Detaylı Denetim Logu
         log_embed = discord.Embed(
-            title="📋 EKONOMİ DENETİM LOGU • EŞYA TANIMLANDI",
+            title="📋 EKONOMİ DENETİM LOGU • EŞYA TRANSFERİ",
             color=discord.Color.green(),
             timestamp=datetime.now(timezone.utc)
         )
-        if hasattr(kullanici, "display_avatar"):
-            log_embed.set_thumbnail(url=kullanici.display_avatar.url)
-        log_embed.add_field(name="👮 Yetkili", value=f"{interaction.user.mention}\n`{interaction.user.name}` (`{interaction.user.id}`)", inline=True)
-        log_embed.add_field(name="👤 Hedef Üye", value=f"{kullanici.mention}\n`{kullanici.name}` (`{kullanici.id}`)", inline=True)
-        log_embed.add_field(name="📦 Eşya / Silah", value=f"**{eslesen_esya}**", inline=False)
-        log_embed.add_field(name="🔢 Eklenen Miktar", value=f"`+{adet} adet`", inline=True)
-        log_embed.add_field(name="📊 Toplam Miktar", value=f"`{user['inventory'][eslesen_esya]} adet`", inline=True)
-        log_embed.set_footer(text=f"Piyade RP Denetim Ağı • Komut: /esya-ver • Yetkili: {interaction.user.name}", icon_url=interaction.user.display_avatar.url if hasattr(interaction.user, "display_avatar") else None)
+        if hasattr(self.target, "display_avatar"):
+            log_embed.set_thumbnail(url=self.target.display_avatar.url)
+        log_embed.add_field(name="👤 Gönderen Üye", value=f"{self.sender.mention}\n`{self.sender.name}` (`{self.sender.id}`)", inline=True)
+        log_embed.add_field(name="🎯 Alıcı Üye", value=f"{self.target.mention}\n`{self.target.name}` (`{self.target.id}`)", inline=True)
+        log_embed.add_field(name="📦 Eşya / Silah", value=f"**{self.esya_adi}**", inline=False)
+        log_embed.add_field(name="🔢 Transfer Edilen", value=f"`{adet_val} adet`", inline=True)
+        log_embed.add_field(name="📊 Alıcıdaki Yeni Toplam", value=f"`{target_user['inventory'][self.esya_adi]} adet`", inline=True)
+        transfer_tipi = "Yetkili Tanımlaması" if self.is_yetkili_tanim else "Oyuncular Arası Transfer"
+        log_embed.set_footer(text=f"Piyade RP Denetim Ağı • {transfer_tipi} | İşlem: {self.sender.name}")
         await ekonomi_log_gonder(interaction.guild, log_embed)
+
+
+class EsyaGonderSelect(discord.ui.Select):
+    def __init__(self, sender: discord.Member, target: discord.Member, options: list[discord.SelectOption], item_limits: dict):
+        super().__init__(
+            placeholder="📦 Göndermek istediğiniz eşyayı veya silahı seçin...",
+            options=options,
+            min_values=1,
+            max_values=1
+        )
+        self.sender = sender
+        self.target = target
+        self.item_limits = item_limits
+
+    async def callback(self, interaction: discord.Interaction):
+        selected_val = self.values[0]
+        is_yetkili = selected_val.startswith("sys:")
+        esya_adi = selected_val.split(":", 1)[1]
+        max_adet = self.item_limits.get(esya_adi, 999 if is_yetkili else 1)
+
+        modal = EsyaGonderModal(
+            sender=self.sender,
+            target=self.target,
+            esya_adi=esya_adi,
+            max_adet=max_adet,
+            is_yetkili_tanim=is_yetkili
+        )
+        await interaction.response.send_modal(modal)
+
+
+class EsyaGonderView(discord.ui.View):
+    def __init__(self, sender: discord.Member, target: discord.Member, options: list[discord.SelectOption], item_limits: dict):
+        super().__init__(timeout=180)
+        self.add_item(EsyaGonderSelect(sender, target, options, item_limits))
+
+
+    @app_commands.command(
+        name="esya-ver",
+        description="Envanterinizdeki bir eşyayı veya silahı başka bir oyuncuya verir/aktarır."
+    )
+    @app_commands.describe(
+        kullanici="Eşya verilecek / transfer edilecek üye"
+    )
+    async def cmd_esya_ver(self, interaction: discord.Interaction, kullanici: discord.Member):
+        if kullanici.id == interaction.user.id:
+            return await interaction.response.send_message(
+                "❌ Kendinize eşya veremezsiniz!",
+                ephemeral=True
+            )
+        if kullanici.bot:
+            return await interaction.response.send_message(
+                "❌ Botlara eşya gönderemezsiniz!",
+                ephemeral=True
+            )
+
+        sender_user = get_user_profile(interaction.user.id)
+        sender_inv = sender_user.get("inventory", {})
+        active_items = {k: v for k, v in sender_inv.items() if v > 0}
+        is_yetkili = yetkili_mi(interaction.user)
+
+        tum_esyalar = {**MARKET_ESYALARI, **ILLEGAL_ESYALAR, **SILAH_ESYALARI}
+
+        # Envanter tamamen boşsa ve yetkili değilse
+        if not active_items and not is_yetkili:
+            bos_embed = discord.Embed(
+                title="🎒 ENVANTERİNİZ BOŞ",
+                description=(
+                    f"{interaction.user.mention}, şu anda envanterinizde {kullanici.mention} kullanıcısına gönderebileceğiniz herhangi bir eşya veya ruhsatsız silah bulunmamaktadır!\n\n"
+                    "💡 **Nasıl Eşya Edinilir?**\n"
+                    "• **24/7 Market:** Şehir marketinden genel ihtiyaç malzemeleri satın alabilirsiniz.\n"
+                    "• **Ammu-Nation:** Silahçıdan ruhsatsız tabanca temin edebilirsiniz.\n"
+                    "• **Kara Borsa:** Yeraltı şebekesinden illegal teçhizatlar satın alabilirsiniz."
+                ),
+                color=discord.Color.orange(),
+                timestamp=datetime.now(timezone.utc)
+            )
+            bos_embed.set_footer(text="Piyade RP Envanter Sistemi")
+            return await interaction.response.send_message(embed=bos_embed, ephemeral=True)
+
+        options = []
+        item_limits = {}
+
+        # 1. Kullanıcının kendi envanterindeki eşyalar
+        for item, count in active_items.items():
+            info = tum_esyalar.get(item, {})
+            emoji = info.get("emoji", "📦")
+            options.append(discord.SelectOption(
+                label=item,
+                value=f"inv:{item}",
+                description=f"Envanterinizde: {count} adet mevcut",
+                emoji=emoji
+            ))
+            item_limits[item] = count
+
+        # 2. Yetkili ise sistem eşyalarından da ekleme seçeneği sun
+        if is_yetkili:
+            if not active_items:
+                # Yetkilinin envanteri boşsa tüm sistem eşyalarını listele
+                for item, info in tum_esyalar.items():
+                    options.append(discord.SelectOption(
+                        label=f"{item} (Yetkili)",
+                        value=f"sys:{item}",
+                        description="Sistemden doğrudan tanımla",
+                        emoji=info.get("emoji", "📦")
+                    ))
+                    item_limits[item] = 999
+            else:
+                # Kendi envanterinde olmayan sistem eşyalarını da yetkili seçeneği olarak ekle
+                for item, info in tum_esyalar.items():
+                    if item not in active_items and len(options) < 25:
+                        options.append(discord.SelectOption(
+                            label=f"{item} (Yetkili)",
+                            value=f"sys:{item}",
+                            description="Sistemden doğrudan tanımla",
+                            emoji=info.get("emoji", "📦")
+                        ))
+                        item_limits[item] = 999
+
+        embed = discord.Embed(
+            title="🎁 OYUNCU EŞYA TRANSFER MERKEZİ",
+            description=(
+                f"**🎯 Alıcı Üye:** {kullanici.mention} `({kullanici.display_name})`\n"
+                f"**👤 Gönderen:** {interaction.user.mention}\n"
+                "──────────────────────────────────────────\n\n"
+                "📖 **[ TRANSFER TALİMATI & NASIL YAPILIR? ]**\n"
+                "1. Aşağıdaki menüden göndermek istediğiniz **eşyayı veya ruhsatsız silahı** seçin.\n"
+                "2. Eşyayı seçtiğiniz an ekrana gelecek olan **Adet Belirleme Formu'na (Anket)** kaç adet göndermek istediğinizi yazın.\n"
+                "3. Formu onayladığınızda eşya envanterinizden düşülerek güvenle alıcının çantasına aktarılacaktır.\n\n"
+                "⚠️ **[ DİKKAT EDİLMESİ GEREKEN HUSUSLAR ]**\n"
+                "• Gönderilecek miktar envanterinizde sahip olduğunuz adedi aşamaz.\n"
+                "• Tamamlanan transferler sunucu denetim loglarına kaydedilir ve geri alınamaz."
+            ),
+            color=0x2ECC71,
+            timestamp=datetime.now(timezone.utc)
+        )
+        if hasattr(kullanici, "display_avatar"):
+            embed.set_thumbnail(url=kullanici.display_avatar.url)
+        embed.set_footer(text="Piyade RP • Güvenli Eşya Takas & Transfer Protokolü")
+
+        view = EsyaGonderView(
+            sender=interaction.user,
+            target=kullanici,
+            options=options,
+            item_limits=item_limits
+        )
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
     @app_commands.command(name="atm-mesafe", description="ER:LC oyununda size en yakın ATM noktasını ve mesafenizi gösterir.")
     @app_commands.describe(kullanici="Mesafe kontrolü yapılacak üye (Varsayılan: siz)")
