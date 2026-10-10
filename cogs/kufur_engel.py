@@ -63,7 +63,10 @@ def _build_pattern(word: str) -> re.Pattern:
 # ============================
 # Kelimelerin normalleştirilmiş (Türkçe, leet-free, tekrar harfsiz) halleri yazılmıştır.
 # Bunlar _normalize() işleminden geçirilmiş metinde aranır.
-# Kısa (≤3 harf) kelimeler için tam sözcük eşleşmesi, uzunlar için içerik arama yapılır.
+# Kelimelerin normalleştirilmiş (Türkçe, leet-free, tekrar harfsiz) halleri yazılmıştır.
+# Bunlar _normalize() işleminden geçirilmiş metinde aranır.
+# Masum kelimelerin (örn. asalak, kontaminasyon, kombina) hatalı engellenmemesi için
+# tüm köklerde sözcük sınırı (\b) kullanılır.
 
 KUFUR_KOKLERI: list[str] = [
     # Cinsel
@@ -73,18 +76,18 @@ KUFUR_KOKLERI: list[str] = [
     "amk", "amq", "bok",
     "amina", "amini", "amcik",
     "got", "gotten", "gotlek",
-    "pic", "serefsiz",
-    "orospu", "orsp",
-    "pezevenk",
+    "pic", "serefsiz", "serefsizler",
+    "orospu", "orospular", "orsp",
+    "pezevenk", "pezevenkler",
     "ibne", "ibneler",
     "gavat", "kahpe",
-    "tasak", "tassak", "yavşak",
+    "tasak", "tassak", "yavşak", "yavsak", "yavsaklar",
     "dol",
     # Hakaret
-    "gerizekal", "aptal", "salak", "ahmak",
+    "gerizekal", "gerizekali", "gerizekalilar", "aptal", "aptallar", "salak", "salaklar", "ahmak",
     "bok", "pislik",
-    "manyak",
-    "bok kafal",
+    "manyak", "manyaklar",
+    "bok kafal", "bok kafali",
     "beyinsiz",
     # Aile hakareti
     "anani", "ananin", "bacini", "karini", "ananizi",
@@ -92,20 +95,29 @@ KUFUR_KOKLERI: list[str] = [
     "zenci", "gavur",
 ]
 
-# Kısa kökler (≤3 harf normalize) için tam sözcük eşleşmesi gerektir
-_KISA_ESLESME: set[str] = {k for k in KUFUR_KOKLERI if len(k) <= 3}
+# Köklerin de _normalize() işleminden geçirilmiş halleri aranır
+_NORM_KOKLER: set[str] = {_normalize(k) for k in KUFUR_KOKLERI}
 
-# Uzun kökler içerik aramasıyla bulunur
-_UZUN_KOKLER: list[str] = [k for k in KUFUR_KOKLERI if len(k) > 3]
+# Kısa kökler (≤3 harf normalize) için tam sözcük eşleşmesi gerektir
+_KISA_ESLESME: set[str] = {k for k in _NORM_KOKLER if len(k) <= 3}
+
+# Uzun kökler (>3 harf)
+_UZUN_KOKLER: list[str] = sorted([k for k in _NORM_KOKLER if len(k) > 3], key=len, reverse=True)
 
 # Ön derleme → her başlatmada tekrar derlenmez
 _KISA_PATTERN = re.compile(
     r"\b(" + "|".join(re.escape(k) for k in _KISA_ESLESME) + r")\b"
 ) if _KISA_ESLESME else None
 
+# Uzun kökler: Masum kelimelerin (örn. asalak, kontaminasyon, kombina) engellenmemesi için \b kelime sınırı uygulanır
 _UZUN_PATTERNS: list[re.Pattern] = [
-    re.compile(re.escape(k)) for k in _UZUN_KOKLER
+    re.compile(r"\b" + re.escape(k) + r"\b") for k in _UZUN_KOKLER
 ]
+
+# Performans için tek birleşik regex
+_UZUN_PATTERN = re.compile(
+    r"\b(" + "|".join(re.escape(k) for k in _UZUN_KOKLER) + r")\b"
+) if _UZUN_KOKLER else None
 
 # Özel harf-arası boşluk toleransı (s i k, s.i.k, s*i*k)
 _TOLERANSLI_PATTERNS: list[re.Pattern] = [
@@ -133,7 +145,9 @@ def kufur_mu(metin: str) -> bool:
         if pat.search(metin_lower):
             return True
 
-    # Uzun kökler: içerik araması (normalize metinde)
+    # Uzun kökler: \b kelime sınırı ile arama (normalize metinde)
+    if _UZUN_PATTERN and _UZUN_PATTERN.search(norm):
+        return True
     for pat in _UZUN_PATTERNS:
         if pat.search(norm):
             return True
