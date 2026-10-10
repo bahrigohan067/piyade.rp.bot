@@ -891,18 +891,8 @@ class UyariSistemi(commands.Cog):
             except Exception:
                 continue
             
-            # 30 günden fazla geçmişse sıfırla
+            # 30 günden fazla geçmişse sıfırla (Log kayıtlarına dokunulmaz!)
             if (simdi - son_tarih).days >= 30 and user_data.get("toplam_puan", 0) > 0:
-                uyari_kanali = self.bot.get_channel(UYARILAR_KANAL_ID)
-                if uyari_kanali:
-                    for uyari in user_data.get("uyarilar", []):
-                        log_msg_id = uyari.get("log_msg_id")
-                        if log_msg_id:
-                            try:
-                                msg = await uyari_kanali.fetch_message(log_msg_id)
-                                await msg.delete()
-                            except Exception:
-                                pass
                 user_data["uyarilar"] = []
                 user_data["toplam_puan"] = 0
                 user_data["kademe"] = 0
@@ -1075,58 +1065,7 @@ class UyariSistemi(commands.Cog):
         uid = str(kisi.id)
         data = load_data(UYARI_DATA_FILE)
         
-        silinen = 0
-        silinen_ids = set()
-        
-        uyari_kanali = self.bot.get_channel(UYARILAR_KANAL_ID)
-        if not uyari_kanali:
-            try:
-                uyari_kanali = await self.bot.fetch_channel(UYARILAR_KANAL_ID)
-            except Exception:
-                uyari_kanali = None
-
-        if uyari_kanali:
-            # 1. Veritabanında kayıtlı log mesajı ID'lerini sil
-            if uid in data:
-                for uyari in data[uid].get("uyarilar", []):
-                    log_msg_id = uyari.get("log_msg_id")
-                    if log_msg_id:
-                        try:
-                            msg = await uyari_kanali.fetch_message(int(log_msg_id))
-                            await msg.delete()
-                            silinen_ids.add(int(log_msg_id))
-                            silinen += 1
-                        except Exception:
-                            pass
-            
-            # 2. Kanal geçmişini tarayarak bu kişiye ait bot uyarı mesajlarını da temizle
-            try:
-                async for m in uyari_kanali.history(limit=100):
-                    if m.id in silinen_ids:
-                        continue
-                    if m.author == self.bot.user:
-                        eslesiyor = False
-                        kisi_id_str = str(kisi.id)
-                        if kisi_id_str in m.content:
-                            eslesiyor = True
-                        elif m.embeds:
-                            for emb in m.embeds:
-                                emb_text = f"{emb.title or ''} {emb.description or ''}"
-                                for f in emb.fields:
-                                    emb_text += f" {f.name} {f.value}"
-                                if kisi_id_str in emb_text:
-                                    eslesiyor = True
-                                    break
-                        if eslesiyor:
-                            try:
-                                await m.delete()
-                                silinen_ids.add(m.id)
-                                silinen += 1
-                            except Exception:
-                                pass
-            except Exception:
-                pass
-                            
+        # Kullanıcının uyarı verilerini ve puanını sıfırla (Uyarı kanalındaki log mesajlarına KESİNLİKLE DOKUNULMAZ)
         if uid in data:
             data[uid]["uyarilar"] = []
             data[uid]["toplam_puan"] = 0
@@ -1136,7 +1075,7 @@ class UyariSistemi(commands.Cog):
             save_data(UYARI_DATA_FILE, data)
             _sync_post_bg("/api/sync/sifirla", {"userId": str(uid)})
         
-        # Tüm uyarı + yetkili uyarı + jail rollerini kaldır
+        # Varsa tüm uyarı + yetkili uyarı + jail rollerini kaldır
         tum_roller = TUM_UYARI_ROLLERI + TUM_YETKILI_UYARI_ROLLERI + [JAIL_ROL]
         silinecek = [interaction.guild.get_role(r) for r in tum_roller 
                      if interaction.guild.get_role(r) and interaction.guild.get_role(r) in kisi.roles]
@@ -1146,7 +1085,7 @@ class UyariSistemi(commands.Cog):
             except discord.Forbidden:
                 pass
         
-        await interaction.followup.send(f"✅ {kisi.mention} kişisinin tüm uyarıları sıfırlandı ve kanaldaki {silinen} adet uyarı log mesajı silindi.", ephemeral=True)
+        await interaction.followup.send(f"✅ {kisi.mention} kişisinin tüm uyarıları ve uyarı puanı sıfırlandı, varsa rolleri kaldırıldı.\n*(Uyarı kanalındaki log kayıtlarına dokunulmadı).* ", ephemeral=True)
 
 
 async def setup(bot):

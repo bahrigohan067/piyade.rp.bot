@@ -1,6 +1,7 @@
 import discord
 from discord.ext import commands, tasks
 import aiohttp
+import asyncio
 import os
 import json
 from datetime import datetime, timezone, timedelta
@@ -150,6 +151,7 @@ class LiveRadar(commands.Cog):
         self.session = None  # Kalıcı ClientSession (Socket sızıntılarını önler)
         self.son_konumlar = {}  # Katil takibi ve son bilinen konumlar
         self.aktif_oyuncular = {}  # Anlık çevrimiçi oyuncular ve konumları
+        self.current_players_count = 0  # Güncel oyuncu sayısı
         self.last_radar_state = None  # Dirty-checking için son durum önbelleği
 
         # Kalıcı dashboard mesaj kimliği
@@ -160,10 +162,14 @@ class LiveRadar(commands.Cog):
         kill_data = load_json(KILLER_FILE, {"islenen_killer": [], "gunluk_safezone_ihlalleri": {}})
         self.islenen_killer = set(kill_data.get("islenen_killer", []))
 
-        self.radar_loop.start()
+        # 1. Arkaplan anlık konum döngüsü (3 saniye: Panellerin anında yanıt vermesi için)
+        self.arkaplan_konum_loop.start()
+        # 2. Discord gösterge döngüsü (15 saniye: KULLANICI TALEBİYLE SÜRESİ KESİNLİKLE AYNI KALIR)
+        self.discord_dashboard_loop.start()
 
     def cog_unload(self):
-        self.radar_loop.cancel()
+        self.arkaplan_konum_loop.cancel()
+        self.discord_dashboard_loop.cancel()
         if self.session and not self.session.closed:
             self.bot.loop.create_task(self.session.close())
 
@@ -228,8 +234,12 @@ class LiveRadar(commands.Cog):
         embed.set_footer(text="Piyade RP Canlı Radar • Tek Panel Dashboard Modu")
         return embed
 
-    @tasks.loop(seconds=15)
-    async def radar_loop(self):
+    @tasks.loop(seconds=3)
+    async def arkaplan_konum_loop(self):
+        """
+        ER:LC API'sinden oyuncu konumlarını arkaplanda anlık (her 3 saniyede bir) çeker.
+        Panellerin (ATM, Silahçı vb.) beklemeden anında yanıt vermesini sağlar.
+        """
         if not self.bot.is_ready():
             return
 
@@ -237,30 +247,32 @@ class LiveRadar(commands.Cog):
         if not api_key:
             return
 
-        kanal = self.bot.get_channel(RADAR_KANAL_ID)
-        if not kanal:
-            try:
-                kanal = await self.bot.fetch_channel(RADAR_KANAL_ID)
-            except Exception:
-                return
-
         # 1. ER:LC API Verisini Çek
         try:
             session = await self.get_session()
             headers = {'Server-Key': api_key}
-            async with session.get('https://api.erlc.gg/v2/server?Players=true&KillLogs=true', headers=headers, timeout=6) as resp:
-                if resp.status != 200:
+            async with session.get('https://api.erlc.gg/v2/server?Players=true&KillLogs=true', headers=headers, timeout=5) as resp:
+                if resp.status == 429:
+                    retry_after = resp.headers.get("Retry-After", "5")
+                    try:
+                        wait_sec = float(retry_after)
+                    except ValueError:
+                        wait_sec = 5.0
+                    print(f"[RADAR] ER:LC API 429 Rate Limit. {wait_sec}s bekleniyor...", flush=True)
+                    await asyncio.sleep(min(wait_sec, 8.0))
                     return
+                elif resp.status != 200:
+                    return
+
                 data = await resp.json()
                 players = data.get("Players", [])
                 kill_logs = data.get("KillLogs", [])
-                current_players_count = data.get("CurrentPlayers", len(players))
-        except Exception as e:
-            print(f"[RADAR HATA] API isteği başarısız: {e}", flush=True)
+                self.current_players_count = data.get("CurrentPlayers", len(players))
+        except Exception:
             return
 
-        # 2. Oyuncu Konumlarını Ayrıştır
-        aktif_oyuncular = {}
+        # 2. Oyuncu Konumlarını Ayrıştır ve Hafızayı Güncelle
+        yeni_aktif = {}
         for p in players:
             player_str = p.get("Player", "")
             if not player_str:
@@ -275,7 +287,7 @@ class LiveRadar(commands.Cog):
             sokak = loc.get("StreetName", "-")
             bina = loc.get("BuildingNumber", "-")
 
-            aktif_oyuncular[isim] = {
+            yeni_aktif[isim] = {
                 "x": round(x, 1) if isinstance(x, (int, float)) else x,
                 "y": round(y, 1) if isinstance(y, (int, float)) else y,
                 "z": round(z, 1) if isinstance(z, (int, float)) else z,
@@ -284,12 +296,37 @@ class LiveRadar(commands.Cog):
                 "building": bina
             }
 
-        self.aktif_oyuncular = aktif_oyuncular
-        self.son_konumlar.update(aktif_oyuncular)
+        # Aktif oyuncuları ve son konumları anlık güncelle
+        self.aktif_oyuncular = yeni_aktif
+        self.son_konumlar.update(yeni_aktif)
 
-        # 3. Dirty Checking: Oyuncu durumunda değişiklik yoksa Discord edit isteği atma (0 Rate Limit!)
-        state_repr = tuple(sorted((k, v["x"], v["z"], v["postal"]) for k, v in aktif_oyuncular.items()))
+        # 3. Kill Loglarını ve Safezone / E.S.K İhlallerini Anında İşle
+        if kill_logs:
+            bolgeler_data = load_json(BOLGELER_FILE, TANIMLI_BOLGELER) or TANIMLI_BOLGELER
+            await self._process_kill_logs(kill_logs, bolgeler_data)
+
+    @tasks.loop(seconds=15)
+    async def discord_dashboard_loop(self):
+        """
+        Discord üzerindeki radar gösterge mesajını günceller.
+        SÜRE KULLANICI TALEBİ GEREĞİ TAM OLARAK 15 SANİYEDİR (DEĞİŞTİRİLMEZ).
+        """
+        if not self.bot.is_ready():
+            return
+
+        kanal = self.bot.get_channel(RADAR_KANAL_ID)
+        if not kanal:
+            try:
+                kanal = await self.bot.fetch_channel(RADAR_KANAL_ID)
+            except Exception:
+                return
+
+        aktif_oyuncular = self.aktif_oyuncular
+        current_players_count = self.current_players_count or len(aktif_oyuncular)
         bolgeler_data = load_json(BOLGELER_FILE, TANIMLI_BOLGELER) or TANIMLI_BOLGELER
+
+        # Dirty Checking: Oyuncu durumunda değişiklik yoksa Discord edit isteği atma (0 Rate Limit!)
+        state_repr = tuple(sorted((k, v["x"], v["z"], v["postal"]) for k, v in aktif_oyuncular.items()))
 
         if state_repr != self.last_radar_state or not self.dashboard_msg_id:
             embed = self.olustur_dashboard_embed(aktif_oyuncular, current_players_count, bolgeler_data)
@@ -324,139 +361,147 @@ class LiveRadar(commands.Cog):
 
             self.last_radar_state = state_repr
 
-        # 4. ER:LC Kill Loglarını ve Safezone İhlallerini Kontrol Et
-        if kill_logs:
-            rdm_kanal = self.bot.get_channel(RDM_LOG_KANAL_ID)
-            if not rdm_kanal:
-                try:
-                    rdm_kanal = await self.bot.fetch_channel(RDM_LOG_KANAL_ID)
-                except Exception:
-                    rdm_kanal = None
+    @arkaplan_konum_loop.before_loop
+    async def before_arkaplan_konum_loop(self):
+        await self.bot.wait_until_ready()
 
-            kill_tracker = load_json(KILLER_FILE, {"islenen_killer": [], "gunluk_safezone_ihlalleri": {}})
-            tz_tr = timezone(timedelta(hours=3))
-            bugun = datetime.now(tz_tr).strftime("%Y-%m-%d")
+    @discord_dashboard_loop.before_loop
+    async def before_discord_dashboard_loop(self):
+        await self.bot.wait_until_ready()
 
-            for k in kill_logs:
-                ts = k.get("Timestamp", 0)
-                killer_raw = str(k.get("Killer", "Bilinmiyor:0"))
-                victim_raw = str(k.get("Killed", "Bilinmiyor:0"))
-                kill_id = f"{killer_raw}_{victim_raw}_{ts}"
+    async def _process_kill_logs(self, kill_logs: list, bolgeler_data: dict):
+        """Kill loglarını ve Safezone / E.S.K ihlallerini denetler ve log kanalına bildirir."""
+        rdm_kanal = self.bot.get_channel(RDM_LOG_KANAL_ID)
+        if not rdm_kanal:
+            try:
+                rdm_kanal = await self.bot.fetch_channel(RDM_LOG_KANAL_ID)
+            except Exception:
+                rdm_kanal = None
 
-                if kill_id in self.islenen_killer:
-                    continue
+        kill_tracker = load_json(KILLER_FILE, {"islenen_killer": [], "gunluk_safezone_ihlalleri": {}})
+        tz_tr = timezone(timedelta(hours=3))
+        bugun = datetime.now(tz_tr).strftime("%Y-%m-%d")
 
-                self.islenen_killer.add(kill_id)
+        for k in kill_logs:
+            ts = k.get("Timestamp", 0)
+            killer_raw = str(k.get("Killer", "Bilinmiyor:0"))
+            victim_raw = str(k.get("Killed", "Bilinmiyor:0"))
+            kill_id = f"{killer_raw}_{victim_raw}_{ts}"
 
-                killer_name = killer_raw.split(':')[0]
-                killer_id = killer_raw.split(':')[1] if ':' in killer_raw else "0"
-                victim_name = victim_raw.split(':')[0]
-                victim_id = victim_raw.split(':')[1] if ':' in victim_raw else "0"
+            if kill_id in self.islenen_killer:
+                continue
 
-                pos_info = self.son_konumlar.get(killer_name, {})
-                x_val = pos_info.get("x", "-")
-                z_val = pos_info.get("z", "-")
-                postal = pos_info.get("postal", "-")
-                street = pos_info.get("street", "-")
-                bina = pos_info.get("building", "-")
-                raw_silah = k.get("Weapon")
-                if raw_silah and str(raw_silah).strip().lower() not in ["none", "null", ""]:
-                    silah = str(raw_silah).strip()
-                    atesli_silah_mi = True
-                else:
-                    silah = "Bilinmiyor (Ateşli Silah Değil / Araç vb.)"
-                    atesli_silah_mi = False
+            self.islenen_killer.add(kill_id)
 
-                # 4.A - E.S.K İhlali Denetimi (Envantersiz Silah Kullanımı)
-                if atesli_silah_mi:
-                    esk_kanal = self.bot.get_channel(ESK_LOG_KANAL_ID)
-                    if not esk_kanal:
-                        try:
-                            esk_kanal = await self.bot.fetch_channel(ESK_LOG_KANAL_ID)
-                        except Exception:
-                            esk_kanal = None
+            killer_name = killer_raw.split(':')[0]
+            killer_id = killer_raw.split(':')[1] if ':' in killer_raw else "0"
+            victim_name = victim_raw.split(':')[0]
+            victim_id = victim_raw.split(':')[1] if ':' in victim_raw else "0"
 
-                    killer_disc_id = roblox_to_discord(killer_id, killer_name)
-                    victim_disc_id = roblox_to_discord(victim_id, victim_name)
+            pos_info = self.son_konumlar.get(killer_name, {})
+            x_val = pos_info.get("x", "-")
+            z_val = pos_info.get("z", "-")
+            postal = pos_info.get("postal", "-")
+            street = pos_info.get("street", "-")
+            bina = pos_info.get("building", "-")
+            raw_silah = k.get("Weapon")
+            if raw_silah and str(raw_silah).strip().lower() not in ["none", "null", ""]:
+                silah = str(raw_silah).strip()
+                atesli_silah_mi = True
+            else:
+                silah = "Bilinmiyor (Ateşli Silah Değil / Araç vb.)"
+                atesli_silah_mi = False
 
-                    envanter_data = load_json(ENVANTER_FILE, {})
-                    has_weapon = False
-
-                    if killer_disc_id:
-                        user_inv = envanter_data.get("users", {}).get(str(killer_disc_id), {}).get("inventory", {})
-                        for inv_item, count in user_inv.items():
-                            if count > 0:
-                                if inv_item.lower() in silah.lower() or silah.lower() in inv_item.lower():
-                                    has_weapon = True
-                                    break
-
-                    if not has_weapon:
-                        if esk_kanal:
-                            killer_mention = f"<@{killer_disc_id}>" if killer_disc_id else "*Kayıtsız / Eşleşmedi*"
-                            victim_mention = f"<@{victim_disc_id}>" if victim_disc_id else "*Kayıtsız / Eşleşmedi*"
-
-                            esk_embed = discord.Embed(
-                                title="🚨 E.S.K İHLALİ (ENVANTERSİZ SİLAH KULLANIMI)",
-                                description=(
-                                    f"**{killer_name}**, Discord envanterinde kayıtlı olmayan **`{silah}`** ile cinayet/saldırı gerçekleştirdi!\n"
-                                    "Sunucu kuralları gereği envanter kaydı bulunmayan ateşli silahların kullanımı kesinlikle yasaktır."
-                                ),
-                                color=discord.Color.dark_red(),
-                                timestamp=datetime.fromtimestamp(ts, tz=timezone.utc) if ts else datetime.now(tz_tr)
-                            )
-                            esk_embed.add_field(name="👤 Saldırgan (Katil)", value=f"**{killer_name}** `(ID: {killer_id})`\nDiscord: {killer_mention}", inline=True)
-                            esk_embed.add_field(name="🎯 Mağdur (Kurban)", value=f"**{victim_name}** `(ID: {victim_id})`\nDiscord: {victim_mention}", inline=True)
-                            esk_embed.add_field(name="🔫 Kullanılan Silah", value=f"`{silah}`", inline=True)
-                            esk_embed.add_field(name="🎒 Envanter Durumu", value=f"❌ Saldırganın envanterinde **`{silah}`** BULUNMUYOR!", inline=False)
-
-                            konum_str = f"📍 X: `{x_val}` | Z: `{z_val}` (Posta: `{postal}` • {street})"
-                            esk_embed.add_field(name="📍 Olay Yeri", value=konum_str, inline=False)
-                            esk_embed.set_footer(text="Piyade RP • Otomatik E.S.K Denetim Sistemi")
-
-                            try:
-                                await esk_kanal.send(embed=esk_embed)
-                                print(f"[E.S.K İHLALİ] {killer_name} -> {victim_name} ({silah}) logu iletildi.", flush=True)
-                            except Exception as e:
-                                print(f"[E.S.K HATA] Log iletilemedi: {e}", flush=True)
-
-                # 4.B - Safezone İhlali Denetimi
-                safezone = bolge_kontrol(x_val, z_val, postal, bolgeler_data)
-                if not safezone:
-                    continue
-
-                gunluk_sozluk = kill_tracker.setdefault("gunluk_safezone_ihlalleri", {}).setdefault(bugun, {})
-                ihlal_sayi = gunluk_sozluk.get(killer_name, 0) + 1
-                gunluk_sozluk[killer_name] = ihlal_sayi
-
-                embed = discord.Embed(
-                    title="🚨 SAFEZONE İHLALİ TESPİT EDİLDİ",
-                    description=f"**{killer_name}**, korumalı bölge olan **{safezone}** sınırları içerisinde saldırı/cinayet gerçekleştirdi!",
-                    color=discord.Color.red(),
-                    timestamp=datetime.fromtimestamp(ts, tz=timezone.utc) if ts else datetime.now(tz_tr)
-                )
-                embed.add_field(name="👤 İhlal Eden (Saldırgan)", value=f"**{killer_name}** `(ID: {killer_id})`", inline=True)
-                embed.add_field(name="🎯 Mağdur (Kurban)", value=f"**{victim_name}** `(ID: {victim_id})`", inline=True)
-                embed.add_field(name="🔫 Kullanılan Silah", value=f"`{silah}`", inline=True)
-
-                konum_metni = (
-                    f"**🛡️ İhlal Bölgesi:** `{safezone}`\n"
-                    f"**📍 Koordinatlar:** X: `{x_val}` | Z: `{z_val}`\n"
-                    f"**📮 Posta Kodu:** `{postal}`\n"
-                    f"**🛣️ Cadde / Bina:** `{street}` (No: `{bina}`)"
-                )
-                embed.add_field(name="📍 Olay Yeri Detayları", value=konum_metni, inline=False)
-                embed.add_field(name="📊 Günlük Safezone İhlali", value=f"Bugün **{ihlal_sayi}.** kez tekrarladı", inline=True)
-                embed.set_footer(text="ER-LC Piyadeleri • Safezone Güvenlik Takip Sistemi")
-
-                if rdm_kanal:
+            # 4.A - E.S.K İhlali Denetimi (Envantersiz Silah Kullanımı)
+            if atesli_silah_mi:
+                esk_kanal = self.bot.get_channel(ESK_LOG_KANAL_ID)
+                if not esk_kanal:
                     try:
-                        await rdm_kanal.send(embed=embed)
-                        print(f"[SAFEZONE İHLALİ] {killer_name} -> {victim_name} ({safezone}) logu iletildi.", flush=True)
-                    except Exception as e:
-                        print(f"[SAFEZONE HATA] Log iletilemedi: {e}", flush=True)
+                        esk_kanal = await self.bot.fetch_channel(ESK_LOG_KANAL_ID)
+                    except Exception:
+                        esk_kanal = None
 
-            kill_tracker["islenen_killer"] = list(self.islenen_killer)[-200:]
-            save_json_atomic(KILLER_FILE, kill_tracker)
+                killer_disc_id = roblox_to_discord(killer_id, killer_name)
+                victim_disc_id = roblox_to_discord(victim_id, victim_name)
+
+                envanter_data = load_json(ENVANTER_FILE, {})
+                has_weapon = False
+
+                if killer_disc_id:
+                    user_inv = envanter_data.get("users", {}).get(str(killer_disc_id), {}).get("inventory", {})
+                    for inv_item, count in user_inv.items():
+                        if count > 0:
+                            if inv_item.lower() in silah.lower() or silah.lower() in inv_item.lower():
+                                has_weapon = True
+                                break
+
+                if not has_weapon:
+                    if esk_kanal:
+                        killer_mention = f"<@{killer_disc_id}>" if killer_disc_id else "*Kayıtsız / Eşleşmedi*"
+                        victim_mention = f"<@{victim_disc_id}>" if victim_disc_id else "*Kayıtsız / Eşleşmedi*"
+
+                        esk_embed = discord.Embed(
+                            title="🚨 E.S.K İHLALİ (ENVANTERSİZ SİLAH KULLANIMI)",
+                            description=(
+                                f"**{killer_name}**, Discord envanterinde kayıtlı olmayan **`{silah}`** ile cinayet/saldırı gerçekleştirdi!\n"
+                                "Sunucu kuralları gereği envanter kaydı bulunmayan ateşli silahların kullanımı kesinlikle yasaktır."
+                            ),
+                            color=discord.Color.dark_red(),
+                            timestamp=datetime.fromtimestamp(ts, tz=timezone.utc) if ts else datetime.now(tz_tr)
+                        )
+                        esk_embed.add_field(name="👤 Saldırgan (Katil)", value=f"**{killer_name}** `(ID: {killer_id})`\nDiscord: {killer_mention}", inline=True)
+                        esk_embed.add_field(name="🎯 Mağdur (Kurban)", value=f"**{victim_name}** `(ID: {victim_id})`\nDiscord: {victim_mention}", inline=True)
+                        esk_embed.add_field(name="🔫 Kullanılan Silah", value=f"`{silah}`", inline=True)
+                        esk_embed.add_field(name="🎒 Envanter Durumu", value=f"❌ Saldırganın envanterinde **`{silah}`** BULUNMUYOR!", inline=False)
+
+                        konum_str = f"📍 X: `{x_val}` | Z: `{z_val}` (Posta: `{postal}` • {street})"
+                        esk_embed.add_field(name="📍 Olay Yeri", value=konum_str, inline=False)
+                        esk_embed.set_footer(text="Piyade RP • Otomatik E.S.K Denetim Sistemi")
+
+                        try:
+                            await esk_kanal.send(embed=esk_embed)
+                            print(f"[E.S.K İHLALİ] {killer_name} -> {victim_name} ({silah}) logu iletildi.", flush=True)
+                        except Exception as e:
+                            print(f"[E.S.K HATA] Log iletilemedi: {e}", flush=True)
+
+            # 4.B - Safezone İhlali Denetimi
+            safezone = bolge_kontrol(x_val, z_val, postal, bolgeler_data)
+            if not safezone:
+                continue
+
+            gunluk_sozluk = kill_tracker.setdefault("gunluk_safezone_ihlalleri", {}).setdefault(bugun, {})
+            ihlal_sayi = gunluk_sozluk.get(killer_name, 0) + 1
+            gunluk_sozluk[killer_name] = ihlal_sayi
+
+            embed = discord.Embed(
+                title="🚨 SAFEZONE İHLALİ TESPİT EDİLDİ",
+                description=f"**{killer_name}**, korumalı bölge olan **{safezone}** sınırları içerisinde saldırı/cinayet gerçekleştirdi!",
+                color=discord.Color.red(),
+                timestamp=datetime.fromtimestamp(ts, tz=timezone.utc) if ts else datetime.now(tz_tr)
+            )
+            embed.add_field(name="👤 İhlal Eden (Saldırgan)", value=f"**{killer_name}** `(ID: {killer_id})`", inline=True)
+            embed.add_field(name="🎯 Mağdur (Kurban)", value=f"**{victim_name}** `(ID: {victim_id})`", inline=True)
+            embed.add_field(name="🔫 Kullanılan Silah", value=f"`{silah}`", inline=True)
+
+            konum_metni = (
+                f"**🛡️ İhlal Bölgesi:** `{safezone}`\n"
+                f"**📍 Koordinatlar:** X: `{x_val}` | Z: `{z_val}`\n"
+                f"**📮 Posta Kodu:** `{postal}`\n"
+                f"**🛣️ Cadde / Bina:** `{street}` (No: `{bina}`)"
+            )
+            embed.add_field(name="📍 Olay Yeri Detayları", value=konum_metni, inline=False)
+            embed.add_field(name="📊 Günlük Safezone İhlali", value=f"Bugün **{ihlal_sayi}.** kez tekrarladı", inline=True)
+            embed.set_footer(text="ER-LC Piyadeleri • Safezone Güvenlik Takip Sistemi")
+
+            if rdm_kanal:
+                try:
+                    await rdm_kanal.send(embed=embed)
+                    print(f"[SAFEZONE İHLALİ] {killer_name} -> {victim_name} ({safezone}) logu iletildi.", flush=True)
+                except Exception as e:
+                    print(f"[SAFEZONE HATA] Log iletilemedi: {e}", flush=True)
+
+        kill_tracker["islenen_killer"] = list(self.islenen_killer)[-200:]
+        save_json_atomic(KILLER_FILE, kill_tracker)
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(LiveRadar(bot))

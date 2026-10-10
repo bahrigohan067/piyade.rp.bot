@@ -68,14 +68,14 @@ async def send_erlc_command(command_text: str) -> dict:
     Official endpoint: POST https://api.erlc.gg/v2/server/command
     Fallback endpoint: POST https://api.erlc.gg/v1/server/command
     """
-    api_key = os.getenv("ERLC_API_KEY")
+    api_key = os.getenv("ERLC_API_KEY", "").strip("'\" \r\n\t")
     if not api_key:
         msg = "ERLC_API_KEY ortam değişkeni bulunamadı! Lütfen Railway ortam değişkenlerini kontrol edin."
         print(f"[RP OYLAMA UYARI] {msg}", flush=True)
         return {"success": False, "message": msg, "status": None}
 
     headers = {
-        "server-key": api_key,
+        "Server-Key": api_key,
         "Content-Type": "application/json"
     }
 
