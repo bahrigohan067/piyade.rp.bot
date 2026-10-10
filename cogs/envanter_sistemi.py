@@ -30,6 +30,7 @@ ENVANTER_FILE = os.path.join(DATA_DIR, "envanter_verileri.json")
 KAYIT_FILE = os.path.join(DATA_DIR, "kayit_data.json")
 ATM_FILE = os.path.join(DATA_DIR, "atm_noktalari.json")
 EKONOMI_LOGO_PATH = os.path.join(BASE_DIR, "assets", "ekonomi_panel_logo.jpg")
+BOLGELER_FILE = os.path.join(DATA_DIR, "bolgeler.json")
 
 # =====================================================================
 # EŞYA VE FİYAT TANIMLARI
@@ -275,6 +276,189 @@ def kullanici_atm_kontrol(bot: commands.Bot, member: discord.Member) -> tuple[bo
         return True, "basarili", en_yakin, mesafe, oyuncu_konum
     else:
         return False, "uzakta", en_yakin, mesafe, oyuncu_konum
+
+# =====================================================================
+# SİLAHÇI (GUNSHOP) BÖLGE VE KONUM DOĞRULAMA FONKSİYONLARI
+# =====================================================================
+DEFAULT_GUNSHOP_POINTS = [
+    {"x": 1095.33, "z": 3411.18, "postal_code": "227", "street": "Curb (No: 2271)"},
+    {"x": 1118.24, "z": 3408.05, "postal_code": "227", "street": "Curb (No: 2271)"},
+    {"x": 1129.06, "z": 3388.36, "postal_code": "227", "street": "Curb (No: 2271)"},
+    {"x": 1110.77, "z": 3395.14, "postal_code": "227", "street": "Curb (No: 2271)"}
+]
+
+def point_in_polygon(x: float, z: float, polygon: list) -> bool:
+    """Ray-Casting Algoritması: (x, z) noktasının poligon içinde olup olmadığını hesaplar."""
+    if not polygon or len(polygon) < 3:
+        return False
+    pts = []
+    for p in polygon:
+        if isinstance(p, dict):
+            pts.append((float(p["x"]), float(p["z"])))
+        elif isinstance(p, (list, tuple)):
+            pts.append((float(p[0]), float(p[1])))
+    n = len(pts)
+    inside = False
+    p1x, p1z = pts[0]
+    for i in range(n + 1):
+        p2x, p2z = pts[i % n]
+        if min(p1z, p2z) < z <= max(p1z, p2z):
+            if x <= max(p1x, p2x):
+                if p1z != p2z:
+                    xinters = (z - p1z) * (p2x - p1x) / (p2z - p1z) + p1x
+                if p1x == p2x or x <= xinters:
+                    inside = not inside
+        p1x, p1z = p2x, p2z
+    return inside
+
+def dist_point_to_segment(px: float, pz: float, x1: float, z1: float, x2: float, z2: float) -> float:
+    """Nokta ile doğru parçası arasındaki en kısa Öklid mesafesini hesaplar."""
+    dx = x2 - x1
+    dz = z2 - z1
+    l2 = dx * dx + dz * dz
+    if l2 == 0:
+        return math.sqrt((px - x1) ** 2 + (pz - z1) ** 2)
+    t = max(0.0, min(1.0, ((px - x1) * dx + (pz - z1) * dz) / l2))
+    proj_x = x1 + t * dx
+    proj_z = z1 + t * dz
+    return math.sqrt((px - proj_x) ** 2 + (pz - proj_z) ** 2)
+
+def point_to_polygon_distance(px: float, pz: float, polygon: list) -> tuple[bool, float]:
+    """(px, pz) noktasının poligon içinde olup olmadığını ve en yakın kenara olan mesafesini hesaplar."""
+    if point_in_polygon(px, pz, polygon):
+        return True, 0.0
+    min_dist = float("inf")
+    pts = []
+    for p in polygon:
+        if isinstance(p, dict):
+            pts.append((float(p["x"]), float(p["z"])))
+        elif isinstance(p, (list, tuple)):
+            pts.append((float(p[0]), float(p[1])))
+    n = len(pts)
+    if n < 2:
+        return False, 999999.0
+    for i in range(n):
+        p1x, p1z = pts[i]
+        p2x, p2z = pts[(i + 1) % n]
+        d = dist_point_to_segment(px, pz, p1x, p1z, p2x, p2z)
+        if d < min_dist:
+            min_dist = d
+    return False, min_dist
+
+def get_gunshop_bolgesi() -> dict:
+    """data/bolgeler.json dosyasından gun_shop bölge bilgilerini çeker."""
+    data = load_json(BOLGELER_FILE, {})
+    if isinstance(data, dict) and "gun_shop" in data:
+        return data["gun_shop"]
+    return {
+        "name": "Gunshop Etkileşimli Bölge (Safezone)",
+        "type": "safezone_and_shop",
+        "maksimum_mesafe": 6.0,
+        "postal_codes": ["227"],
+        "points": DEFAULT_GUNSHOP_POINTS
+    }
+
+def kullanici_gunshop_kontrol(bot: commands.Bot, member: discord.Member) -> tuple[bool, str, dict, float, dict | None]:
+    """
+    Kullanıcının ER:LC oyununda Silahçı (Ammu-Nation • Posta 227) konumunda olup olmadığını denetler.
+    Dönüş: (uygun_mu, durum_kodu, gunshop_info, mesafe, oyuncu_konumu)
+    """
+    gunshop_info = get_gunshop_bolgesi()
+    points = gunshop_info.get("points") or DEFAULT_GUNSHOP_POINTS
+
+    disp_name = getattr(member, "display_name", "") or getattr(member, "name", "")
+    roblox_ad, roblox_id = discord_to_roblox(member.id, disp_name)
+
+    radar_cog = bot.get_cog("LiveRadar")
+    if not radar_cog:
+        return False, "radar_yok", gunshop_info, 999999.0, None
+
+    aktif_oyuncular = getattr(radar_cog, "aktif_oyuncular", {}) or {}
+    oyuncu_konum = None
+
+    if roblox_ad:
+        if roblox_ad in aktif_oyuncular:
+            oyuncu_konum = aktif_oyuncular[roblox_ad]
+        else:
+            for p_name, p_loc in aktif_oyuncular.items():
+                if p_name.lower() == roblox_ad.lower():
+                    oyuncu_konum = p_loc
+                    break
+
+    if not oyuncu_konum and disp_name and "|" in disp_name:
+        for parca in disp_name.split("|"):
+            temiz = parca.strip()
+            if len(temiz) >= 3:
+                for p_name, p_loc in aktif_oyuncular.items():
+                    if p_name.lower() == temiz.lower():
+                        oyuncu_konum = p_loc
+                        roblox_ad = p_name
+                        break
+            if oyuncu_konum:
+                break
+
+    if not oyuncu_konum:
+        if not roblox_ad:
+            return False, "kayit_yok", gunshop_info, 999999.0, None
+        return False, "oyunda_degil", gunshop_info, 999999.0, None
+
+    px = oyuncu_konum.get("x")
+    pz = oyuncu_konum.get("z")
+    if not isinstance(px, (int, float)) or not isinstance(pz, (int, float)):
+        return False, "konum_gecersiz", gunshop_info, 999999.0, oyuncu_konum
+
+    inside, mesafe = point_to_polygon_distance(px, pz, points)
+
+    # İzin verilen azami tolerans mesafesi (ATM standardı ile 6.0 metre / studs)
+    max_tolerans = float(gunshop_info.get("maksimum_mesafe", 6.0))
+
+    if inside or mesafe <= max_tolerans:
+        return True, "basarili", gunshop_info, (0.0 if inside else mesafe), oyuncu_konum
+    else:
+        return False, "uzakta", gunshop_info, mesafe, oyuncu_konum
+
+async def gunshop_engelleme_mesaji(interaction: discord.Interaction, durum: str, gunshop_info: dict, mesafe: float, p_loc: dict | None):
+    """Silahçı panelinde konum doğrulaması başarısız olduğunda kullanıcıya detaylı hata bildirimi gönderir."""
+    if durum == "kayit_yok":
+        return await interaction.response.send_message(
+            "❌ **Kayıtlı Roblox Hesabı Bulunamadı!**\n"
+            "Silahçı (Ammu-Nation) panelini kullanabilmek için Discord hesabınızın onaylı bir Roblox hesabı ile eşleşmiş olması gerekir.\n"
+            "Lütfen önce sunucuda kayıt olunuz.",
+            ephemeral=True
+        )
+    elif durum == "oyunda_degil":
+        roblox_ad, _ = discord_to_roblox(interaction.user.id, interaction.user.display_name)
+        return await interaction.response.send_message(
+            f"❌ **ER:LC Sunucusunda Aktif Değilsiniz!**\n"
+            f"Silahçı panelini kullanabilmek için ER:LC oyununda aktif olmalı ve Silahçı (Ammu-Nation) dükkanında bulunmalısınız.\n"
+            f"🎮 **Kayıtlı Roblox Hesabı:** `{roblox_ad or 'Bilinmiyor'}`",
+            ephemeral=True
+        )
+    elif durum == "uzakta" and p_loc:
+        px = p_loc.get("x", "-")
+        pz = p_loc.get("z", "-")
+        posta = p_loc.get("postal", "-")
+        sokak = p_loc.get("street", "-")
+        max_tol = int(gunshop_info.get("maksimum_mesafe", 6.0))
+        return await interaction.response.send_message(
+            f"❌ **Silahçı (Ammu-Nation) Bölgesi Dışındasınız!**\n"
+            f"Ruhsatsız silah satın alabilmek ve silahçı panelini kullanabilmek için **ER:LC oyununda Silahçı dükkanında veya kapısında** olmalısınız.\n\n"
+            f"📍 **Mevcut Konumunuz:** X: `{px}` | Z: `{pz}` (Posta: `{posta}` • {sokak})\n"
+            f"🏪 **Gereken Bölge:** **{gunshop_info.get('name', 'Ammu-Nation Gunshop')}** (Posta: `227`)\n"
+            f"📏 **Silahçıya Mesafe:** `{round(mesafe, 1)} metre` *(İzin verilen azami tolerans: {max_tol} metre)*\n"
+            f"🛣️ **Adres:** `Curb (No: 2271) • Posta 227`",
+            ephemeral=True
+        )
+    elif durum == "radar_yok":
+        return await interaction.response.send_message(
+            "❌ Canlı radar sistemi aktif değil veya API bekleniyor. Lütfen birkaç saniye sonra tekrar deneyiniz.",
+            ephemeral=True
+        )
+    else:
+        return await interaction.response.send_message(
+            "❌ Konum doğrulaması yapılamadı veya oyun radar verisi henüz güncellenmedi. Lütfen birkaç saniye sonra tekrar deneyiniz.",
+            ephemeral=True
+        )
 
 # =====================================================================
 # ATM MODALLARI VE GÖRÜNÜMÜ
@@ -840,6 +1024,11 @@ class GunshopAdetModal(discord.ui.Modal):
         except ValueError:
             return await interaction.response.send_message("❌ Geçerli ve pozitif bir sayı girmelisiniz!", ephemeral=True)
 
+        # 2. Aşama Konum Doğrulaması (İşlem anında Gunshop bölgesinde mi?)
+        uygun, durum, g_info, mesafe, p_loc = kullanici_gunshop_kontrol(interaction.client, interaction.user)
+        if not uygun:
+            return await gunshop_engelleme_mesaji(interaction, durum, g_info, mesafe, p_loc)
+
         async with _ENV_LOCK:
             data = _get_raw_data()
             stoklar = data.setdefault("gunshop_stock", {"Beretta 92": 50, "Colt 1911": 50})
@@ -896,16 +1085,25 @@ class GunshopView(discord.ui.View):
 
     @discord.ui.button(label="Beretta 92 Satın Al", emoji="🔫", style=discord.ButtonStyle.primary, custom_id="gunshop_btn_beretta")
     async def beretta_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        uygun, durum, g_info, mesafe, p_loc = kullanici_gunshop_kontrol(interaction.client, interaction.user)
+        if not uygun:
+            return await gunshop_engelleme_mesaji(interaction, durum, g_info, mesafe, p_loc)
         cog = self.bot_cog or interaction.client.get_cog("EnvanterSistemi")
         await interaction.response.send_modal(GunshopAdetModal("Beretta 92", cog))
 
     @discord.ui.button(label="Colt 1911 Satın Al", emoji="🔫", style=discord.ButtonStyle.primary, custom_id="gunshop_btn_colt")
     async def colt_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        uygun, durum, g_info, mesafe, p_loc = kullanici_gunshop_kontrol(interaction.client, interaction.user)
+        if not uygun:
+            return await gunshop_engelleme_mesaji(interaction, durum, g_info, mesafe, p_loc)
         cog = self.bot_cog or interaction.client.get_cog("EnvanterSistemi")
         await interaction.response.send_modal(GunshopAdetModal("Colt 1911", cog))
 
     @discord.ui.button(label="Stok Durumu", emoji="📦", style=discord.ButtonStyle.secondary, custom_id="gunshop_btn_stok")
     async def stok_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        uygun, durum, g_info, mesafe, p_loc = kullanici_gunshop_kontrol(interaction.client, interaction.user)
+        if not uygun:
+            return await gunshop_engelleme_mesaji(interaction, durum, g_info, mesafe, p_loc)
         data = _get_raw_data()
         stoklar = data.get("gunshop_stock", {"Beretta 92": 50, "Colt 1911": 50})
         b_stok = stoklar.get("Beretta 92", 0)
@@ -1622,8 +1820,9 @@ class EnvanterSistemi(commands.Cog):
             description=(
                 "Los Santos Ammu-Nation silah mağazasına hoş geldiniz.\n"
                 "Aşağıdaki butonları kullanarak doğrudan satın alım yapabilirsiniz.\n\n"
-                "⚠️ **ÖNEMLİ BİLGİLENDİRME:**\n"
+                "⚠️ **ÖNEMLİ BİLGİLENDİRME & KURALLAR:**\n"
                 "• **Silahçıdan satın alınan tüm silahlar RUHSATSIZDIR!**\n"
+                "• **LOKASYON ŞARTI:** Paneli kullanmak ve silah satın alabilmek için **ER:LC oyununda Silahçı (Ammu-Nation • Posta 227)** mağazasında veya kapısında olmalısınız!\n"
                 "• Emniyet birimlerinin yapacağı üst aramasında veya denetimlerde ruhsatsız silah bulundurmak suç teşkil eder.\n"
                 "• Ödemeler doğrudan **NAKİT** cüzdanınızdan tahsil edilir.\n"
                 "• Satın aldığınız silahlar anında dijital envanterinize kaydedilir.\n"
@@ -1863,8 +2062,9 @@ class EnvanterSistemi(commands.Cog):
                 description=(
                     "Los Santos Ammu-Nation silah mağazasına hoş geldiniz.\n"
                     "Aşağıdaki butonları kullanarak doğrudan satın alım yapabilirsiniz.\n\n"
-                    "⚠️ **ÖNEMLİ BİLGİLENDİRME:**\n"
+                    "⚠️ **ÖNEMLİ BİLGİLENDİRME & KURALLAR:**\n"
                     "• **Silahçıdan satın alınan tüm silahlar RUHSATSIZDIR!**\n"
+                    "• **LOKASYON ŞARTI:** Paneli kullanmak ve silah satın alabilmek için **ER:LC oyununda Silahçı (Ammu-Nation • Posta 227)** mağazasında veya kapısında olmalısınız!\n"
                     "• Emniyet birimlerinin yapacağı üst aramasında veya denetimlerde ruhsatsız silah bulundurmak suç teşkil eder.\n"
                     "• Ödemeler doğrudan **NAKİT** cüzdanınızdan tahsil edilir.\n"
                     "• Satın aldığınız silahlar anında dijital envanterinize kaydedilir.\n"
@@ -2279,6 +2479,51 @@ class EsyaGonderView(discord.ui.View):
         embed.add_field(name="🛣️ ATM Adresi & Detayı", value=f"`{en_yakin['street']} • {en_yakin['detay']}`", inline=False)
         embed.add_field(name="📊 Terminal Durumu", value=durum_metin, inline=False)
         embed.set_footer(text="Piyade RP • Canlı GPS & ATM Doğrulama Ağı")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @app_commands.command(name="silahci-mesafe", description="ER:LC oyununda Silahçı (Ammu-Nation) mağazasına olan mesafenizi gösterir.")
+    @app_commands.describe(kullanici="Mesafe kontrolü yapılacak üye (Varsayılan: siz)")
+    async def cmd_silahci_mesafe(self, interaction: discord.Interaction, kullanici: discord.Member = None):
+        hedef = kullanici or interaction.user
+        uygun, durum, g_info, mesafe, p_loc = kullanici_gunshop_kontrol(self.bot, hedef)
+        
+        if durum == "kayit_yok":
+            return await interaction.response.send_message(
+                f"❌ {hedef.mention} için onaylı bir Roblox hesabı bulunamadı. Lütfen önce sunucuda kayıt olunuz.",
+                ephemeral=True
+            )
+        if durum == "oyunda_degil":
+            roblox_ad, _ = discord_to_roblox(hedef.id, hedef.display_name)
+            return await interaction.response.send_message(
+                f"❌ {hedef.mention} şu anda ER:LC sunucusunda aktif değil! (Roblox: `{roblox_ad or 'Bilinmiyor'}`)",
+                ephemeral=True
+            )
+        if not p_loc:
+            return await interaction.response.send_message(
+                "❌ Konum doğrulaması yapılamadı veya oyun radar verisi henüz güncellenmedi.",
+                ephemeral=True
+            )
+
+        px = p_loc.get("x", "-")
+        pz = p_loc.get("z", "-")
+        posta = p_loc.get("postal", "-")
+        sokak = p_loc.get("street", "-")
+        max_tol = int(g_info.get("maksimum_mesafe", 6.0))
+        
+        durum_metin = "🟢 **Silahçı Bölgesindesiniz! (Panel Kullanılabilir)**" if uygun else "🔴 **Silahçı Bölgesi Dışındasınız! (Çok Uzak)**"
+        
+        embed = discord.Embed(
+            title=f"🔫 CANLI SİLAHÇI (AMMU-NATION) MESAFE ANALİZİ • {hedef.display_name}",
+            color=discord.Color.green() if uygun else discord.Color.orange(),
+            timestamp=datetime.now(timezone.utc)
+        )
+        embed.set_thumbnail(url=hedef.display_avatar.url)
+        embed.add_field(name="📍 Oyun İçi Konumunuz", value=f"X: `{px}` | Z: `{pz}`\nPosta: `{posta}` ({sokak})", inline=True)
+        embed.add_field(name="🏪 Hedef Mağaza", value=f"**{g_info.get('name', 'Ammu-Nation Gunshop')}**\nPosta: `227`", inline=True)
+        embed.add_field(name="📏 Mesafe", value=f"**{round(mesafe, 1)} metre**\n*(İzin Verilen Azami Tolerans: {max_tol} metre)*", inline=True)
+        embed.add_field(name="🛣️ Mağaza Adresi", value="`Curb (No: 2271) • Posta 227`", inline=False)
+        embed.add_field(name="📊 Panel Erişim Durumu", value=durum_metin, inline=False)
+        embed.set_footer(text="Piyade RP • Canlı GPS & Silahçı Doğrulama Ağı")
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
 

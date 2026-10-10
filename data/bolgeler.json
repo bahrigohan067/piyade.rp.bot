@@ -2,6 +2,7 @@
   "gun_shop": {
     "name": "Gunshop Etkileşimli Bölge (Safezone)",
     "type": "safezone_and_shop",
+    "maksimum_mesafe": 6.0,
     "postal_codes": [
       "227"
     ],
