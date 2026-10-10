@@ -5,6 +5,9 @@ import json
 import os
 import random
 import string
+import threading
+import urllib.request
+import urllib.error
 from datetime import datetime, timedelta
 
 # ==================== KANAL & ROL ID'LERİ ====================
@@ -131,9 +134,89 @@ def generate_uyari_id():
     """4 haneli benzersiz uyarı ID'si üretir."""
     return ''.join(random.choices(string.ascii_uppercase + string.digits, k=4))
 
+def _sync_post_bg(endpoint: str, payload: dict):
+    """Web sitesi API'si ile arka planda sessizce senkronizasyon yapar."""
+    def _run():
+        bot_token = os.getenv("TOKEN") or os.getenv("DISCORD_BOT_TOKEN")
+        site_url = os.getenv("SITE_URL", "https://piyade-rp.up.railway.app").rstrip("/")
+        if not bot_token or not site_url:
+            return
+        url = f"{site_url}{endpoint}"
+        try:
+            req_data = json.dumps(payload).encode("utf-8")
+            req = urllib.request.Request(
+                url,
+                data=req_data,
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {bot_token}",
+                    "x-bot-token": bot_token
+                },
+                method="POST"
+            )
+            with urllib.request.urlopen(req, timeout=3):
+                pass
+        except Exception:
+            pass
+    threading.Thread(target=_run, daemon=True).start()
+
+def fetch_user_from_site(uid: str):
+    """Web sitesi API'sinden kullanıcının güncel uyarı verisini çeker."""
+    bot_token = os.getenv("TOKEN") or os.getenv("DISCORD_BOT_TOKEN")
+    site_url = os.getenv("SITE_URL", "https://piyade-rp.up.railway.app").rstrip("/")
+    if not bot_token or not site_url:
+        return None
+    url = f"{site_url}/api/sync/uyari?userId={uid}"
+    try:
+        req = urllib.request.Request(
+            url,
+            headers={
+                "Authorization": f"Bearer {bot_token}",
+                "x-bot-token": bot_token
+            },
+            method="GET"
+        )
+        with urllib.request.urlopen(req, timeout=2) as resp:
+            if resp.status == 200:
+                return json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        return None
+    return None
+
+def fetch_sicil_from_site(uid: str):
+    """Web sitesi API'sinden kullanıcının güncel sicil kayıtlarını çeker."""
+    bot_token = os.getenv("TOKEN") or os.getenv("DISCORD_BOT_TOKEN")
+    site_url = os.getenv("SITE_URL", "https://piyade-rp.up.railway.app").rstrip("/")
+    if not bot_token or not site_url:
+        return None
+    url = f"{site_url}/api/sync/sicil?userId={uid}"
+    try:
+        req = urllib.request.Request(
+            url,
+            headers={
+                "Authorization": f"Bearer {bot_token}",
+                "x-bot-token": bot_token
+            },
+            method="GET"
+        )
+        with urllib.request.urlopen(req, timeout=2) as resp:
+            if resp.status == 200:
+                data = json.loads(resp.read().decode("utf-8"))
+                return data.get("records", [])
+    except Exception:
+        return None
+    return None
+
 def get_user_data(uid: str):
     """Kullanıcının uyarı verisini döndürür, yoksa oluşturur."""
     data = load_data(UYARI_DATA_FILE)
+    if uid not in data or data[uid].get("toplam_puan", 0) == 0:
+        remote_data = fetch_user_from_site(uid)
+        if remote_data and remote_data.get("toplam_puan", 0) > 0:
+            data[uid] = remote_data
+            save_data(UYARI_DATA_FILE, data)
+            return data[uid]
+
     if uid not in data:
         data[uid] = {
             "uyarilar": [],
@@ -146,10 +229,19 @@ def get_user_data(uid: str):
     return data[uid]
 
 def save_user_data(uid: str, user_data: dict):
-    """Kullanıcı verisini kaydeder."""
+    """Kullanıcı verisini kaydeder ve web sitesiyle senkronize eder."""
     data = load_data(UYARI_DATA_FILE)
     data[uid] = user_data
     save_data(UYARI_DATA_FILE, data)
+
+    latest_uyari = user_data.get("uyarilar", [])[-1] if user_data.get("uyarilar") else None
+    _sync_post_bg("/api/sync/uyari", {
+        "userId": uid,
+        "uyari": latest_uyari,
+        "newPoints": user_data.get("toplam_puan", 0),
+        "newTier": user_data.get("kademe", 0),
+        "jailBitis": user_data.get("jail_bitis")
+    })
 
 def hesapla_kademe(toplam_puan: int) -> int:
     """Toplam puana göre uyarı kademesini hesaplar."""
@@ -166,19 +258,25 @@ def hesapla_kademe(toplam_puan: int) -> int:
     return 0
 
 def add_sicil_record(user_id: int, madde: str, aciklama: str, yetkili_id: int, sonuc: str):
-    """Sicil dosyasına kayıt ekler."""
+    """Sicil dosyasına kayıt ekler ve web sitesiyle senkronize eder."""
     data = load_data(SICIL_DATA_FILE)
     uid = str(user_id)
     if uid not in data:
         data[uid] = []
-    data[uid].append({
+    record = {
         "tarih": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "madde": madde,
         "aciklama": aciklama,
         "yetkili_id": yetkili_id,
         "sonuc": sonuc
-    })
+    }
+    data[uid].append(record)
     save_data(SICIL_DATA_FILE, data)
+
+    _sync_post_bg("/api/sync/sicil", {
+        "userId": uid,
+        "record": record
+    })
 
 # ==================== YARDIMCI FONKSİYONLAR ====================
 
@@ -810,6 +908,7 @@ class UyariSistemi(commands.Cog):
                 user_data["kademe"] = 0
                 user_data["son_uyari_tarihi"] = None
                 degisti = True
+                _sync_post_bg("/api/sync/sifirla", {"userId": str(uid)})
                 
                 # Uyarı rollerini kaldır
                 for guild in self.bot.guilds:
@@ -914,6 +1013,12 @@ class UyariSistemi(commands.Cog):
         sicil_data = load_data(SICIL_DATA_FILE)
         uid = str(kisi.id)
         
+        if uid not in sicil_data or len(sicil_data[uid]) == 0:
+            remote_records = fetch_sicil_from_site(uid)
+            if remote_records:
+                sicil_data[uid] = remote_records
+                save_data(SICIL_DATA_FILE, sicil_data)
+
         if uid not in sicil_data or len(sicil_data[uid]) == 0:
             return await interaction.response.send_message(f"✅ {kisi.mention} kişisinin sicili tamamen temiz.", ephemeral=True)
         
@@ -1029,6 +1134,7 @@ class UyariSistemi(commands.Cog):
             data[uid]["son_uyari_tarihi"] = None
             data[uid]["jail_bitis"] = None
             save_data(UYARI_DATA_FILE, data)
+            _sync_post_bg("/api/sync/sifirla", {"userId": str(uid)})
         
         # Tüm uyarı + yetkili uyarı + jail rollerini kaldır
         tum_roller = TUM_UYARI_ROLLERI + TUM_YETKILI_UYARI_ROLLERI + [JAIL_ROL]
