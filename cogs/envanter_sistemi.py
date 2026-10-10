@@ -36,7 +36,7 @@ EKONOMI_LOGO_PATH = os.path.join(BASE_DIR, "assets", "ekonomi_panel_logo.jpg")
 # =====================================================================
 MARKET_ESYALARI = {
     "İlk Yardım Kiti": {"fiyat": 150, "aciklama": "Yaralanmaları tedavi etmek için acil tıbbi ekipman.", "emoji": "🩹"},
-    "Levye": {"fiyat": 200, "aciklama": "Ağır hizmet tipi çelik levye.", "emoji": "🪓"},
+    "Levye": {"fiyat": 200, "aciklama": "Ağır hizmet tipi çelik levye.", "emoji": "<:5885crowbar:1558470559132819566>"},
     "Çekiç": {"fiyat": 100, "aciklama": "Tamirat ve marangozluk işleri için standart çekiç.", "emoji": "🔨"},
     "Kazma": {"fiyat": 250, "aciklama": "Kazı ve maden işlerinde kullanılan sağlam kazma.", "emoji": "⛏️"},
     "Bıçak": {"fiyat": 350, "aciklama": "Keskin paslanmaz çelik av bıçağı.", "emoji": "🔪"},
@@ -188,6 +188,13 @@ def en_yakin_atm(x: float, z: float) -> tuple[dict | None, float]:
             continue
     return en_yakin, min_dist
 
+def get_atm_max_mesafe() -> float:
+    """data/atm_noktalari.json dosyasından izin verilen maksimum ATM mesafesini dinamik çeker."""
+    data = load_json(ATM_FILE, {})
+    if isinstance(data, dict):
+        return float(data.get("maksimum_mesafe", 6.0))
+    return 6.0
+
 def discord_to_roblox(discord_user_id: int | str, member_display_name: str = "") -> tuple[str | None, str | None]:
     """Discord ID veya kullanıcı adından Roblox kullanıcı adı ve ID'sini bulur."""
     kayit_data = load_json(KAYIT_FILE, {})
@@ -199,7 +206,14 @@ def discord_to_roblox(discord_user_id: int | str, member_display_name: str = "")
     for uid, udata in kayit_data.get("kullanicilar", {}).items():
         if str(uid) == str(discord_user_id):
             return udata.get("roblox_ad"), str(udata.get("roblox_id") or "")
-            
+
+    # Eğer kayıt dosyasında henüz yoksa veya eşleşmediyse Discord display_name üzerinden ayrıştır (örn. 'Ahmet | BGP2008')
+    if member_display_name and "|" in member_display_name:
+        parts = member_display_name.split("|")
+        olasi_roblox = parts[-1].strip()
+        if olasi_roblox and len(olasi_roblox) >= 3:
+            return olasi_roblox, None
+
     return None, None
 
 def kullanici_atm_kontrol(bot: commands.Bot, member: discord.Member) -> tuple[bool, str, dict | None, float | None, dict | None]:
@@ -207,7 +221,8 @@ def kullanici_atm_kontrol(bot: commands.Bot, member: discord.Member) -> tuple[bo
     Kullanıcının ER:LC oyununda bir ATM'nin yakınında olup olmadığını denetler.
     Dönüş: (uygun_mu, durum_kodu, en_yakin_atm, mesafe, oyuncu_konumu)
     """
-    roblox_ad, roblox_id = discord_to_roblox(member.id, getattr(member, "display_name", ""))
+    disp_name = getattr(member, "display_name", "") or getattr(member, "name", "")
+    roblox_ad, roblox_id = discord_to_roblox(member.id, disp_name)
     
     radar_cog = bot.get_cog("LiveRadar")
     if not radar_cog:
@@ -217,21 +232,27 @@ def kullanici_atm_kontrol(bot: commands.Bot, member: discord.Member) -> tuple[bo
 
     oyuncu_konum = None
     
-    # 1. Önce anlık aktif oyuncular tablosundan ara
-    if roblox_ad and roblox_ad in aktif_oyuncular:
-        oyuncu_konum = aktif_oyuncular[roblox_ad]
-    elif roblox_ad:
-        for p_name, p_loc in aktif_oyuncular.items():
-            if p_name.lower() == roblox_ad.lower():
-                oyuncu_konum = p_loc
-                break
+    # 1. Kayıtlı Roblox adıyla anlık aktif oyuncular tablosundan ara (büyük/küçük harf duyarsız)
+    if roblox_ad:
+        if roblox_ad in aktif_oyuncular:
+            oyuncu_konum = aktif_oyuncular[roblox_ad]
+        else:
+            for p_name, p_loc in aktif_oyuncular.items():
+                if p_name.lower() == roblox_ad.lower():
+                    oyuncu_konum = p_loc
+                    break
 
-    # 2. Eğer eşleşmediyse Discord display_name üzerinden ara (örn. 'BGP2008 | Ahmet')
-    if not oyuncu_konum and getattr(member, "display_name", ""):
-        disp = member.display_name.lower()
-        for p_name, p_loc in aktif_oyuncular.items():
-            if p_name.lower() in disp or disp in p_name.lower():
-                oyuncu_konum = p_loc
+    # 2. Eğer roblox_ad ile bulunamadıysa ve display_name'de '|' varsa ayrıştırıp dene
+    if not oyuncu_konum and disp_name and "|" in disp_name:
+        for parca in disp_name.split("|"):
+            temiz = parca.strip()
+            if len(temiz) >= 3:
+                for p_name, p_loc in aktif_oyuncular.items():
+                    if p_name.lower() == temiz.lower():
+                        oyuncu_konum = p_loc
+                        roblox_ad = p_name
+                        break
+            if oyuncu_konum:
                 break
 
     if not oyuncu_konum:
@@ -244,8 +265,7 @@ def kullanici_atm_kontrol(bot: commands.Bot, member: discord.Member) -> tuple[bo
     if not isinstance(px, (int, float)) or not isinstance(pz, (int, float)):
         return False, "konum_gecersiz", None, None, oyuncu_konum
 
-    atm_data = load_json(ATM_FILE, {})
-    max_mesafe = atm_data.get("maksimum_mesafe", 30.0) if isinstance(atm_data, dict) else 30.0
+    max_mesafe = get_atm_max_mesafe()
 
     en_yakin, mesafe = en_yakin_atm(px, pz)
     if not en_yakin:
@@ -275,6 +295,49 @@ class ATMYatirModal(discord.ui.Modal, title="🏧 ATM • Para Yatırma"):
                 raise ValueError
         except ValueError:
             return await interaction.response.send_message("❌ Geçerli ve pozitif bir sayı girmelisiniz!", ephemeral=True)
+
+        # ATM Konum & Mesafe Kesin Doğrulaması (İstisnasız Herkes İçin)
+        uygun, durum, en_yakin, mesafe, p_loc = kullanici_atm_kontrol(interaction.client, interaction.user)
+        if not uygun:
+            if durum == "kayit_yok":
+                return await interaction.response.send_message(
+                    "❌ **Kayıtlı Roblox Hesabı Bulunamadı!**\n"
+                    "ATM terminalini kullanabilmek için Discord hesabınızın onaylı bir Roblox hesabı ile eşleşmiş olması gerekir.\n"
+                    "Lütfen önce sunucuda kayıt olunuz.",
+                    ephemeral=True
+                )
+            elif durum == "oyunda_degil":
+                roblox_ad, _ = discord_to_roblox(interaction.user.id, interaction.user.display_name)
+                return await interaction.response.send_message(
+                    f"❌ **ER:LC Sunucusunda Aktif Değilsiniz!**\n"
+                    f"İşlem tamamlanamadı: Para yatırmak için oyunda aktif olmalı ve bir ATM cihazının hemen yanında durmalısınız.\n"
+                    f"🎮 **Kayıtlı Roblox Hesabı:** `{roblox_ad or 'Bilinmiyor'}`",
+                    ephemeral=True
+                )
+            elif durum == "uzakta" and en_yakin and p_loc:
+                px = p_loc.get("x", "-")
+                pz = p_loc.get("z", "-")
+                posta = p_loc.get("postal", "-")
+                sokak = p_loc.get("street", "-")
+                return await interaction.response.send_message(
+                    f"❌ **İşlem Reddedildi! ATM Cihazından Uzaklaştınız veya Yanında Değilsiniz.**\n"
+                    f"Bankacılık işlemlerini gerçekleştirebilmek için bir ATM cihazının hemen yanında durmalısınız.\n\n"
+                    f"📍 **Mevcut Konumunuz:** X: `{px}` | Z: `{pz}` (Posta: `{posta}` • {sokak})\n"
+                    f"🏧 **En Yakın ATM:** **{en_yakin['name']}** (Posta: `{en_yakin['postal']}`)\n"
+                    f"📏 **Mesafe:** `{round(mesafe, 1)} metre` *(İzin verilen azami mesafe: {int(get_atm_max_mesafe())} metre)*\n"
+                    f"🛣️ **Adres / Detay:** `{en_yakin['street']} • {en_yakin['detay']}`",
+                    ephemeral=True
+                )
+            elif durum == "radar_yok":
+                return await interaction.response.send_message(
+                    "❌ Oyun canlı radar sistemi şu anda aktif değil veya API bekleniyor. İşlem güvenlik sebebiyle iptal edildi.",
+                    ephemeral=True
+                )
+            else:
+                return await interaction.response.send_message(
+                    "❌ Konum doğrulaması yapılamadı veya oyun radar verisi henüz güncellenmedi. İşlem güvenlik sebebiyle iptal edildi.",
+                    ephemeral=True
+                )
 
         async with _ENV_LOCK:
             user = get_user_profile(interaction.user.id)
@@ -315,6 +378,49 @@ class ATMCekModal(discord.ui.Modal, title="🏧 ATM • Para Çekme"):
         except ValueError:
             return await interaction.response.send_message("❌ Geçerli ve pozitif bir sayı girmelisiniz!", ephemeral=True)
 
+        # ATM Konum & Mesafe Kesin Doğrulaması (İstisnasız Herkes İçin)
+        uygun, durum, en_yakin, mesafe, p_loc = kullanici_atm_kontrol(interaction.client, interaction.user)
+        if not uygun:
+            if durum == "kayit_yok":
+                return await interaction.response.send_message(
+                    "❌ **Kayıtlı Roblox Hesabı Bulunamadı!**\n"
+                    "ATM terminalini kullanabilmek için Discord hesabınızın onaylı bir Roblox hesabı ile eşleşmiş olması gerekir.\n"
+                    "Lütfen önce sunucuda kayıt olunuz.",
+                    ephemeral=True
+                )
+            elif durum == "oyunda_degil":
+                roblox_ad, _ = discord_to_roblox(interaction.user.id, interaction.user.display_name)
+                return await interaction.response.send_message(
+                    f"❌ **ER:LC Sunucusunda Aktif Değilsiniz!**\n"
+                    f"İşlem tamamlanamadı: Para çekmek için oyunda aktif olmalı ve bir ATM cihazının hemen yanında durmalısınız.\n"
+                    f"🎮 **Kayıtlı Roblox Hesabı:** `{roblox_ad or 'Bilinmiyor'}`",
+                    ephemeral=True
+                )
+            elif durum == "uzakta" and en_yakin and p_loc:
+                px = p_loc.get("x", "-")
+                pz = p_loc.get("z", "-")
+                posta = p_loc.get("postal", "-")
+                sokak = p_loc.get("street", "-")
+                return await interaction.response.send_message(
+                    f"❌ **İşlem Reddedildi! ATM Cihazından Uzaklaştınız veya Yanında Değilsiniz.**\n"
+                    f"Bankacılık işlemlerini gerçekleştirebilmek için bir ATM cihazının hemen yanında durmalısınız.\n\n"
+                    f"📍 **Mevcut Konumunuz:** X: `{px}` | Z: `{pz}` (Posta: `{posta}` • {sokak})\n"
+                    f"🏧 **En Yakın ATM:** **{en_yakin['name']}** (Posta: `{en_yakin['postal']}`)\n"
+                    f"📏 **Mesafe:** `{round(mesafe, 1)} metre` *(İzin verilen azami mesafe: {int(get_atm_max_mesafe())} metre)*\n"
+                    f"🛣️ **Adres / Detay:** `{en_yakin['street']} • {en_yakin['detay']}`",
+                    ephemeral=True
+                )
+            elif durum == "radar_yok":
+                return await interaction.response.send_message(
+                    "❌ Oyun canlı radar sistemi şu anda aktif değil veya API bekleniyor. İşlem güvenlik sebebiyle iptal edildi.",
+                    ephemeral=True
+                )
+            else:
+                return await interaction.response.send_message(
+                    "❌ Konum doğrulaması yapılamadı veya oyun radar verisi henüz güncellenmedi. İşlem güvenlik sebebiyle iptal edildi.",
+                    ephemeral=True
+                )
+
         async with _ENV_LOCK:
             user = get_user_profile(interaction.user.id)
             if user["bank"] < val:
@@ -345,7 +451,7 @@ class ATMView(discord.ui.View):
     async def yatir_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         uygun, durum, en_yakin, mesafe, p_loc = kullanici_atm_kontrol(interaction.client, interaction.user)
         
-        if not uygun and not yetkili_mi(interaction.user):
+        if not uygun:
             if durum == "kayit_yok":
                 return await interaction.response.send_message(
                     "❌ **Kayıtlı Roblox Hesabı Bulunamadı!**\n"
@@ -371,8 +477,13 @@ class ATMView(discord.ui.View):
                     f"Bankacılık işlemlerini gerçekleştirebilmek için bir ATM cihazının hemen yanında durmalısınız.\n\n"
                     f"📍 **Mevcut Konumunuz:** X: `{px}` | Z: `{pz}` (Posta: `{posta}` • {sokak})\n"
                     f"🏧 **En Yakın ATM:** **{en_yakin['name']}** (Posta: `{en_yakin['postal']}`)\n"
-                    f"📏 **Mesafe:** `{int(mesafe)} metre` *(İzin verilen azami mesafe: 30 metre)*\n"
+                    f"📏 **Mesafe:** `{round(mesafe, 1)} metre` *(İzin verilen azami mesafe: {int(get_atm_max_mesafe())} metre)*\n"
                     f"🛣️ **Adres / Detay:** `{en_yakin['street']} • {en_yakin['detay']}`",
+                    ephemeral=True
+                )
+            elif durum == "radar_yok":
+                return await interaction.response.send_message(
+                    "❌ Canlı radar sistemi aktif değil veya API bekleniyor. Lütfen birkaç saniye sonra tekrar deneyiniz.",
                     ephemeral=True
                 )
             else:
@@ -387,7 +498,7 @@ class ATMView(discord.ui.View):
     async def cek_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         uygun, durum, en_yakin, mesafe, p_loc = kullanici_atm_kontrol(interaction.client, interaction.user)
         
-        if not uygun and not yetkili_mi(interaction.user):
+        if not uygun:
             if durum == "kayit_yok":
                 return await interaction.response.send_message(
                     "❌ **Kayıtlı Roblox Hesabı Bulunamadı!**\n"
@@ -413,8 +524,13 @@ class ATMView(discord.ui.View):
                     f"Bankacılık işlemlerini gerçekleştirebilmek için bir ATM cihazının hemen yanında durmalısınız.\n\n"
                     f"📍 **Mevcut Konumunuz:** X: `{px}` | Z: `{pz}` (Posta: `{posta}` • {sokak})\n"
                     f"🏧 **En Yakın ATM:** **{en_yakin['name']}** (Posta: `{en_yakin['postal']}`)\n"
-                    f"📏 **Mesafe:** `{int(mesafe)} metre` *(İzin verilen azami mesafe: 30 metre)*\n"
+                    f"📏 **Mesafe:** `{round(mesafe, 1)} metre` *(İzin verilen azami mesafe: {int(get_atm_max_mesafe())} metre)*\n"
                     f"🛣️ **Adres / Detay:** `{en_yakin['street']} • {en_yakin['detay']}`",
+                    ephemeral=True
+                )
+            elif durum == "radar_yok":
+                return await interaction.response.send_message(
+                    "❌ Canlı radar sistemi aktif değil veya API bekleniyor. Lütfen birkaç saniye sonra tekrar deneyiniz.",
                     ephemeral=True
                 )
             else:
@@ -441,120 +557,261 @@ class ATMView(discord.ui.View):
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
 # =====================================================================
-# GENEL MARKET GÖRÜNÜMÜ
+# GENEL MARKET VE İLLEGAL MARKET BUTON VE MODAL SİSTEMİ
 # =====================================================================
-class MarketSelect(discord.ui.Select):
-    def __init__(self):
-        options = []
-        for name, info in MARKET_ESYALARI.items():
-            options.append(discord.SelectOption(
-                label=f"{name} — {format_usd(info['fiyat'])}",
-                description=info["aciklama"][:100],
-                emoji=info["emoji"],
-                value=name
-            ))
-        super().__init__(
-            placeholder="🛒 Satın almak istediğiniz market ürününü seçin...",
-            min_values=1,
-            max_values=1,
-            options=options,
-            custom_id="market_select_item"
+async def market_tekli_alim(
+    interaction: discord.Interaction,
+    item_name: str,
+    item_dict: dict,
+    baslik: str,
+    footer: str,
+    color: discord.Color
+):
+    """Butona tek tıkla basıldığında 1 adet ürünü anında satın alır."""
+    item_info = item_dict.get(item_name)
+    if not item_info:
+        return await interaction.response.send_message("❌ Ürün bulunamadı!", ephemeral=True)
+
+    fiyat = item_info["fiyat"]
+    async with _ENV_LOCK:
+        user = get_user_profile(interaction.user.id)
+        if user["cash"] < fiyat:
+            return await interaction.response.send_message(
+                f"❌ **Yetersiz Nakit Para!**\n"
+                f"Bu ürünü alabilmek için cebinizde **{format_usd(fiyat)}** nakit bulunmalıdır.\n"
+                f"Şu anki nakit paranız: **{format_usd(user['cash'])}**",
+                ephemeral=True
+            )
+
+        user["cash"] -= fiyat
+        user["inventory"][item_name] = user["inventory"].get(item_name, 0) + 1
+        update_user_profile(interaction.user.id, user)
+
+    embed = discord.Embed(
+        title=baslik,
+        color=color,
+        description=f"{item_info['emoji']} **1x {item_name}** satın aldınız ve envanterinize eklendi!"
+    )
+    embed.add_field(name="💸 Ödenen Tutar", value=f"`{format_usd(fiyat)}` (Nakit)", inline=True)
+    embed.add_field(name="💵 Kalan Nakit", value=f"`{format_usd(user['cash'])}`", inline=True)
+    embed.add_field(name="🎒 Envanterdeki Adet", value=f"`{user['inventory'][item_name]} adet`", inline=True)
+    embed.set_footer(text=footer)
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+class TopluAlimModal(discord.ui.Modal):
+    """Birden fazla adet ürün almak isteyenler için modal penceresi."""
+    def __init__(self, item_dict: dict, baslik: str, footer: str, color: discord.Color, modal_title: str):
+        super().__init__(title=modal_title)
+        self.item_dict = item_dict
+        self.baslik = baslik
+        self.footer = footer
+        self.color = color
+
+        urunler_ornek = ", ".join(list(item_dict.keys())[:3])
+        self.esya_adi = discord.ui.TextInput(
+            label="Satın Alınacak Eşya / Malzeme Adı",
+            placeholder=f"Örn: {urunler_ornek}",
+            min_length=2,
+            max_length=50,
+            required=True
         )
+        self.adet = discord.ui.TextInput(
+            label="Kaç adet almak istiyorsunuz?",
+            placeholder="Örn: 5",
+            default="1",
+            min_length=1,
+            max_length=4,
+            required=True
+        )
+        self.add_item(self.esya_adi)
+        self.add_item(self.adet)
 
-    async def callback(self, interaction: discord.Interaction):
-        item_name = self.values[0]
-        item_info = MARKET_ESYALARI.get(item_name)
-        if not item_info:
-            return await interaction.response.send_message("❌ Ürün bulunamadı!", ephemeral=True)
+    async def on_submit(self, interaction: discord.Interaction):
+        hedef_esya = self.esya_adi.value.strip()
+        bulunan_esya = None
+        for k in self.item_dict.keys():
+            if k.lower() == hedef_esya.lower():
+                bulunan_esya = k
+                break
+        if not bulunan_esya:
+            for k in self.item_dict.keys():
+                if hedef_esya.lower() in k.lower() or k.lower() in hedef_esya.lower():
+                    bulunan_esya = k
+                    break
 
-        fiyat = item_info["fiyat"]
+        if not bulunan_esya:
+            gecerli = ", ".join(self.item_dict.keys())
+            return await interaction.response.send_message(
+                f"❌ **Geçersiz Eşya Adı!**\nLütfen şu listedeki ürünlerden birini yazınız:\n`{gecerli}`",
+                ephemeral=True
+            )
+
+        try:
+            adet_val = int(self.adet.value.strip())
+            if adet_val <= 0:
+                raise ValueError
+        except ValueError:
+            return await interaction.response.send_message("❌ Geçerli ve pozitif bir sayı girmelisiniz!", ephemeral=True)
+
+        item_info = self.item_dict[bulunan_esya]
+        toplam_tutar = item_info["fiyat"] * adet_val
+
         async with _ENV_LOCK:
             user = get_user_profile(interaction.user.id)
-            if user["cash"] < fiyat:
+            if user["cash"] < toplam_tutar:
                 return await interaction.response.send_message(
                     f"❌ **Yetersiz Nakit Para!**\n"
-                    f"Bu ürünü alabilmek için cebinizde **{format_usd(fiyat)}** nakit bulunmalıdır.\n"
+                    f"**{adet_val} adet {bulunan_esya}** alabilmek için cebinizde **{format_usd(toplam_tutar)}** nakit bulunmalıdır.\n"
                     f"Şu anki nakit paranız: **{format_usd(user['cash'])}**",
                     ephemeral=True
                 )
 
-            user["cash"] -= fiyat
-            user["inventory"][item_name] = user["inventory"].get(item_name, 0) + 1
+            user["cash"] -= toplam_tutar
+            user["inventory"][bulunan_esya] = user["inventory"].get(bulunan_esya, 0) + adet_val
             update_user_profile(interaction.user.id, user)
 
         embed = discord.Embed(
-            title="✅ Alışveriş Tamamlandı",
-            color=discord.Color.green(),
-            description=f"{item_info['emoji']} **1x {item_name}** satın aldınız ve envanterinize eklendi!"
+            title=self.baslik,
+            color=self.color,
+            description=f"{item_info['emoji']} **{adet_val}x {bulunan_esya}** satın aldınız ve envanterinize eklendi!"
         )
-        embed.add_field(name="💸 Ödenen Tutar", value=f"`{format_usd(fiyat)}` (Nakit)", inline=True)
+        embed.add_field(name="💸 Toplam Tutar", value=f"`{format_usd(toplam_tutar)}` (Nakit)", inline=True)
         embed.add_field(name="💵 Kalan Nakit", value=f"`{format_usd(user['cash'])}`", inline=True)
-        embed.add_field(name="🎒 Envanterdeki Adet", value=f"`{user['inventory'][item_name]} adet`", inline=True)
-        embed.set_footer(text="Piyade RP Market Sistemi")
+        embed.add_field(name="🎒 Envanterdeki Adet", value=f"`{user['inventory'][bulunan_esya]} adet`", inline=True)
+        embed.set_footer(text=self.footer)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
 class MarketView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
-        self.add_item(MarketSelect())
+
+    @discord.ui.button(label="İlk Yardım Kiti ($150)", emoji="🩹", style=discord.ButtonStyle.success, custom_id="market_btn_ilkyardim", row=0)
+    async def ilkyardim_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await market_tekli_alim(
+            interaction,
+            "İlk Yardım Kiti",
+            MARKET_ESYALARI,
+            "✅ Alışveriş Tamamlandı",
+            "Piyade RP 24/7 Market Sistemi",
+            discord.Color.green()
+        )
+
+    @discord.ui.button(label="Levye ($200)", emoji="<:5885crowbar:1558470559132819566>", style=discord.ButtonStyle.primary, custom_id="market_btn_levye", row=0)
+    async def levye_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await market_tekli_alim(
+            interaction,
+            "Levye",
+            MARKET_ESYALARI,
+            "✅ Alışveriş Tamamlandı",
+            "Piyade RP 24/7 Market Sistemi",
+            discord.Color.green()
+        )
+
+    @discord.ui.button(label="Çekiç ($100)", emoji="🔨", style=discord.ButtonStyle.primary, custom_id="market_btn_cekic", row=0)
+    async def cekic_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await market_tekli_alim(
+            interaction,
+            "Çekiç",
+            MARKET_ESYALARI,
+            "✅ Alışveriş Tamamlandı",
+            "Piyade RP 24/7 Market Sistemi",
+            discord.Color.green()
+        )
+
+    @discord.ui.button(label="Kazma ($250)", emoji="⛏️", style=discord.ButtonStyle.primary, custom_id="market_btn_kazma", row=1)
+    async def kazma_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await market_tekli_alim(
+            interaction,
+            "Kazma",
+            MARKET_ESYALARI,
+            "✅ Alışveriş Tamamlandı",
+            "Piyade RP 24/7 Market Sistemi",
+            discord.Color.green()
+        )
+
+    @discord.ui.button(label="Bıçak ($350)", emoji="🔪", style=discord.ButtonStyle.secondary, custom_id="market_btn_bicak", row=1)
+    async def bicak_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await market_tekli_alim(
+            interaction,
+            "Bıçak",
+            MARKET_ESYALARI,
+            "✅ Alışveriş Tamamlandı",
+            "Piyade RP 24/7 Market Sistemi",
+            discord.Color.green()
+        )
+
+    @discord.ui.button(label="Toplu / Adetli Satın Al", emoji="🔢", style=discord.ButtonStyle.secondary, custom_id="market_btn_toplu", row=2)
+    async def toplu_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        modal = TopluAlimModal(
+            MARKET_ESYALARI,
+            "✅ Toplu Alışveriş Tamamlandı",
+            "Piyade RP 24/7 Market Sistemi",
+            discord.Color.green(),
+            "🛒 24/7 Market • Toplu Satın Alım"
+        )
+        await interaction.response.send_modal(modal)
 
 # =====================================================================
 # İLLEGAL MARKET GÖRÜNÜMÜ
 # =====================================================================
-class IllegalMarketSelect(discord.ui.Select):
-    def __init__(self):
-        options = []
-        for name, info in ILLEGAL_ESYALAR.items():
-            options.append(discord.SelectOption(
-                label=f"{name} — {format_usd(info['fiyat'])}",
-                description=info["aciklama"][:100],
-                emoji=info["emoji"],
-                value=name
-            ))
-        super().__init__(
-            placeholder="🌑 Satın almak istediğiniz illegal malzemeyi seçin...",
-            min_values=1,
-            max_values=1,
-            options=options,
-            custom_id="illegal_market_select_item"
-        )
-
-    async def callback(self, interaction: discord.Interaction):
-        item_name = self.values[0]
-        item_info = ILLEGAL_ESYALAR.get(item_name)
-        if not item_info:
-            return await interaction.response.send_message("❌ Ürün bulunamadı!", ephemeral=True)
-
-        fiyat = item_info["fiyat"]
-        async with _ENV_LOCK:
-            user = get_user_profile(interaction.user.id)
-            if user["cash"] < fiyat:
-                return await interaction.response.send_message(
-                    f"❌ **Yetersiz Nakit Para!**\n"
-                    f"Bu illegal malzemeyi alabilmek için yanınızda **{format_usd(fiyat)}** nakit bulunmalıdır.\n"
-                    f"Mevcut nakitiniz: **{format_usd(user['cash'])}**",
-                    ephemeral=True
-                )
-
-            user["cash"] -= fiyat
-            user["inventory"][item_name] = user["inventory"].get(item_name, 0) + 1
-            update_user_profile(interaction.user.id, user)
-
-        embed = discord.Embed(
-            title="🌑 İllegal Alışveriş Tamamlandı",
-            color=discord.Color.dark_grey(),
-            description=f"{item_info['emoji']} **1x {item_name}** gizlice teslim alındı ve zulanıza/envanterinize eklendi."
-        )
-        embed.add_field(name="💸 Ödenen Nakit", value=f"`{format_usd(fiyat)}`", inline=True)
-        embed.add_field(name="💵 Kalan Nakit", value=f"`{format_usd(user['cash'])}`", inline=True)
-        embed.add_field(name="🎒 Toplam Miktar", value=f"`{user['inventory'][item_name]} adet`", inline=True)
-        embed.set_footer(text="Piyade RP Kara Borsa")
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-
 class IllegalMarketView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
-        self.add_item(IllegalMarketSelect())
+
+    @discord.ui.button(label="Cam Kesici ($500)", emoji="💎", style=discord.ButtonStyle.danger, custom_id="ill_btn_camkesici", row=0)
+    async def camkesici_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await market_tekli_alim(
+            interaction,
+            "Cam kesici",
+            ILLEGAL_ESYALAR,
+            "🌑 İllegal Alışveriş Tamamlandı",
+            "Piyade RP Kara Borsa",
+            discord.Color.dark_grey()
+        )
+
+    @discord.ui.button(label="RFID Disruptor ($1.200)", emoji="📡", style=discord.ButtonStyle.danger, custom_id="ill_btn_rfid", row=0)
+    async def rfid_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await market_tekli_alim(
+            interaction,
+            "RFID Disruptor",
+            ILLEGAL_ESYALAR,
+            "🌑 İllegal Alışveriş Tamamlandı",
+            "Piyade RP Kara Borsa",
+            discord.Color.dark_grey()
+        )
+
+    @discord.ui.button(label="LockPick ($400)", emoji="🔐", style=discord.ButtonStyle.danger, custom_id="ill_btn_lockpick", row=1)
+    async def lockpick_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await market_tekli_alim(
+            interaction,
+            "LockPick",
+            ILLEGAL_ESYALAR,
+            "🌑 İllegal Alışveriş Tamamlandı",
+            "Piyade RP Kara Borsa",
+            discord.Color.dark_grey()
+        )
+
+    @discord.ui.button(label="Meth Malzemeleri ($600)", emoji="🧪", style=discord.ButtonStyle.danger, custom_id="ill_btn_meth", row=1)
+    async def meth_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await market_tekli_alim(
+            interaction,
+            "Meth Malzemeleri",
+            ILLEGAL_ESYALAR,
+            "🌑 İllegal Alışveriş Tamamlandı",
+            "Piyade RP Kara Borsa",
+            discord.Color.dark_grey()
+        )
+
+    @discord.ui.button(label="Toplu / Adetli Satın Al", emoji="🔢", style=discord.ButtonStyle.secondary, custom_id="ill_btn_toplu", row=2)
+    async def toplu_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        modal = TopluAlimModal(
+            ILLEGAL_ESYALAR,
+            "🌑 Toplu İllegal Alışveriş Tamamlandı",
+            "Piyade RP Kara Borsa",
+            discord.Color.dark_red(),
+            "🌑 Kara Borsa • Toplu Satın Alım"
+        )
+        await interaction.response.send_modal(modal)
 
 # =====================================================================
 # SİLAHÇI (GUNSHOP) MODAL VE GÖRÜNÜMÜ (STOK SİSTEMLİ)
@@ -1534,13 +1791,14 @@ class EnvanterSistemi(commands.Cog):
         # 1. ATM Kanalı
         atm_kanal = guild.get_channel(ATM_KANAL_ID)
         if atm_kanal:
+            max_m_str = int(get_atm_max_mesafe())
             atm_embed = discord.Embed(
                 title="🏧 PACIFIC BANK • CANLI ATM TERMİNALİ",
                 description=(
                     "Pacific Bankası 7/24 kesintisiz ATM terminaline hoş geldiniz.\n"
                     "Para yatırma ve para çekme işlemlerinizi aşağıdaki butonlarla yapabilirsiniz.\n\n"
                     "⚠️ **ÖNEMLİ KURAL & KOORDİNAT DOĞRULAMASI:**\n"
-                    "• Para yatırma ve para çekme işlemleri için **ER:LC oyununda bir ATM cihazının hemen yanında (azami 30 metre)** duruyor olmalısınız!\n"
+                    f"• Para yatırma ve para çekme işlemleri için **ER:LC oyununda bir ATM cihazının hemen yanında (azami {max_m_str} metre)** duruyor olmalısınız!\n"
                     "• Şehir genelinde haritada tanımlanmış **17 adet aktif ATM noktası** bulunmaktadır.\n"
                     "• Canlı radar sistemi oyun içindeki konumunuzu anlık olarak doğrular.\n"
                     "──────────────────────────────────────────"
@@ -1569,7 +1827,7 @@ class EnvanterSistemi(commands.Cog):
                 title="🏪 24/7 SÜPERMARKET • GENEL İHTİYAÇLAR",
                 description=(
                     "Los Santos süpermarketine hoş geldiniz!\n"
-                    "İhtiyacınız olan ürünleri aşağıdaki menüden seçerek anında satın alabilirsiniz.\n\n"
+                    "İhtiyacınız olan ürünleri aşağıdaki butonlara basarak anında satın alabilirsiniz.\n\n"
                     "💵 **Ödeme Yöntemi:** Yalnızca **NAKİT** cüzdanınızdan kesilir.\n"
                     "──────────────────────────────────────────"
                 ),
@@ -1644,7 +1902,7 @@ class EnvanterSistemi(commands.Cog):
                 title="🌑 KARA BORSA • İLLEGAL MARKET",
                 description=(
                     "Yeraltı dünyasının teçhizat ve kimyasal madde tedarik noktası.\n"
-                    "Buradaki ürünler polisin dikkatini çeker. Dikkatli kullanın.\n\n"
+                    "İhtiyacınız olan illegal malzemeleri aşağıdaki butonlara basarak temin edebilirsiniz.\n\n"
                     "💵 **Ödeme:** Sadece elden **NAKİT** para kabul edilir.\n"
                     "──────────────────────────────────────────"
                 ),
@@ -2016,7 +2274,8 @@ class EsyaGonderView(discord.ui.View):
         embed.set_thumbnail(url=hedef.display_avatar.url)
         embed.add_field(name="📍 Oyun İçi Konumunuz", value=f"X: `{px}` | Z: `{pz}`\nPosta: `{posta}` ({sokak})", inline=True)
         embed.add_field(name="🏧 En Yakın ATM", value=f"**{en_yakin['name']}**\nPosta: `{en_yakin['postal']}`", inline=True)
-        embed.add_field(name="📏 Mesafe", value=f"**{int(mesafe)} metre**\n*(İzin Verilen: 30 metre)*", inline=True)
+        max_m_str = int(get_atm_max_mesafe())
+        embed.add_field(name="📏 Mesafe", value=f"**{round(mesafe, 1)} metre**\n*(İzin Verilen Azami: {max_m_str} metre)*", inline=True)
         embed.add_field(name="🛣️ ATM Adresi & Detayı", value=f"`{en_yakin['street']} • {en_yakin['detay']}`", inline=False)
         embed.add_field(name="📊 Terminal Durumu", value=durum_metin, inline=False)
         embed.set_footer(text="Piyade RP • Canlı GPS & ATM Doğrulama Ağı")
