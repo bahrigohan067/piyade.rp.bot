@@ -438,6 +438,21 @@ class ResmiUyariModal(discord.ui.Modal, title="Uyarı - Madde Numarası"):
             add_sicil_record(hedef.id, madde_kodu, bilgi["aciklama"], yetkili.id, sonuc)
             msg_id = await self._uyari_log_gonder(interaction, uyari_id, madde_kodu, bilgi, hedef, yetkili, 0, 0, 0, sonuc, guild)
             
+            u_data = get_user_data(str(hedef.id))
+            u_data["uyarilar"].append({
+                "id": uyari_id,
+                "madde": madde_kodu,
+                "puan": 0,
+                "ozel": "ban",
+                "aciklama": bilgi["aciklama"],
+                "yetkili_id": yetkili.id,
+                "tarih": datetime.now().strftime("%d/%m/%Y %H:%M"),
+                "log_msg_id": msg_id,
+                "kanit_url": None,
+                "aktif": True
+            })
+            save_user_data(str(hedef.id), u_data)
+            
             try:
                 await hedef.send(f"🚫 **{guild.name}** sunucusundan **kalıcı olarak yasaklandınız.**\n📌 Sebep: **{madde_kodu}** — {bilgi['aciklama']}")
             except discord.Forbidden:
@@ -469,6 +484,22 @@ class ResmiUyariModal(discord.ui.Modal, title="Uyarı - Madde Numarası"):
             
             add_sicil_record(hedef.id, madde_kodu, bilgi["aciklama"], yetkili.id, sonuc)
             msg_id = await self._uyari_log_gonder(interaction, uyari_id, madde_kodu, bilgi, hedef, yetkili, 0, 0, 0, sonuc, guild)
+            
+            u_data = get_user_data(str(hedef.id))
+            u_data["uyarilar"].append({
+                "id": uyari_id,
+                "madde": madde_kodu,
+                "puan": 0,
+                "ozel": "yasakli",
+                "aciklama": bilgi["aciklama"],
+                "yetkili_id": yetkili.id,
+                "tarih": datetime.now().strftime("%d/%m/%Y %H:%M"),
+                "log_msg_id": msg_id,
+                "kanit_url": None,
+                "aktif": True
+            })
+            save_user_data(str(hedef.id), u_data)
+            
             await interaction.response.send_message(f"✅ **{hedef.display_name}** doğrudan Yasaklı rolü aldı. (M9)", ephemeral=True)
             return
         
@@ -482,6 +513,22 @@ class ResmiUyariModal(discord.ui.Modal, title="Uyarı - Madde Numarası"):
                 pass
             add_sicil_record(hedef.id, madde_kodu, bilgi["aciklama"], yetkili.id, sonuc)
             msg_id = await self._uyari_log_gonder(interaction, uyari_id, madde_kodu, bilgi, hedef, yetkili, 0, 0, 0, sonuc, guild)
+            
+            u_data = get_user_data(str(hedef.id))
+            u_data["uyarilar"].append({
+                "id": uyari_id,
+                "madde": madde_kodu,
+                "puan": 0,
+                "ozel": "timeout_2gun",
+                "aciklama": bilgi["aciklama"],
+                "yetkili_id": yetkili.id,
+                "tarih": datetime.now().strftime("%d/%m/%Y %H:%M"),
+                "log_msg_id": msg_id,
+                "kanit_url": None,
+                "aktif": True
+            })
+            save_user_data(str(hedef.id), u_data)
+            
             await interaction.response.send_message(f"✅ **{hedef.display_name}** 2 gün timeout aldı. (M4)", ephemeral=True)
             return
         
@@ -496,6 +543,22 @@ class ResmiUyariModal(discord.ui.Modal, title="Uyarı - Madde Numarası"):
                 pass
             add_sicil_record(hedef.id, madde_kodu, bilgi["aciklama"], yetkili.id, sonuc)
             msg_id = await self._uyari_log_gonder(interaction, uyari_id, madde_kodu, bilgi, hedef, yetkili, 0, 0, 0, sonuc, guild)
+            
+            u_data = get_user_data(str(hedef.id))
+            u_data["uyarilar"].append({
+                "id": uyari_id,
+                "madde": madde_kodu,
+                "puan": 0,
+                "ozel": "timeout_4gun",
+                "aciklama": bilgi["aciklama"],
+                "yetkili_id": yetkili.id,
+                "tarih": datetime.now().strftime("%d/%m/%Y %H:%M"),
+                "log_msg_id": msg_id,
+                "kanit_url": None,
+                "aktif": True
+            })
+            save_user_data(str(hedef.id), u_data)
+            
             await interaction.response.send_message(f"✅  **{hedef.display_name}** 4 gün timeout aldı. ({madde_kodu})", ephemeral=True)
             return
 
@@ -509,6 +572,22 @@ class ResmiUyariModal(discord.ui.Modal, title="Uyarı - Madde Numarası"):
                 pass
             add_sicil_record(hedef.id, madde_kodu, bilgi["aciklama"], yetkili.id, sonuc)
             msg_id = await self._uyari_log_gonder(interaction, uyari_id, madde_kodu, bilgi, hedef, yetkili, 0, 0, 0, sonuc, guild)
+            
+            u_data = get_user_data(str(hedef.id))
+            u_data["uyarilar"].append({
+                "id": uyari_id,
+                "madde": madde_kodu,
+                "puan": 0,
+                "ozel": "timeout_1gun",
+                "aciklama": bilgi["aciklama"],
+                "yetkili_id": yetkili.id,
+                "tarih": datetime.now().strftime("%d/%m/%Y %H:%M"),
+                "log_msg_id": msg_id,
+                "kanit_url": None,
+                "aktif": True
+            })
+            save_user_data(str(hedef.id), u_data)
+            
             await interaction.response.send_message(f"✅ **{hedef.display_name}** 1 gün timeout aldı. ({madde_kodu})", ephemeral=True)
             return
         
@@ -699,9 +778,21 @@ class ResmiUyariModal(discord.ui.Modal, title="Uyarı - Madde Numarası"):
         
         uyari_id = generate_uyari_id()
         add_sicil_record(hedef.id, madde_kodu, bilgi["aciklama"], yetkili.id, sonuc)
-        msg_id = await self._uyari_log_gonder(interaction, uyari_id, madde_kodu, {"puan": 0, "aciklama": bilgi["aciklama"]}, hedef, yetkili, 0, 0, yeni_seviye, sonuc, guild, yetkili_uyari=True)
-        # Note: yetkili warnings are not stored in UYARI_DATA_FILE in the same way, 
-        # they are stored in sicil. But we don't need to auto-delete yetkili warnings after 1 month (they are manual).
+        u_data = get_user_data(str(hedef.id))
+        u_data["uyarilar"].append({
+            "id": uyari_id,
+            "madde": madde_kodu,
+            "puan": 0,
+            "yetkili_uyari": True,
+            "seviye": yeni_seviye,
+            "aciklama": bilgi["aciklama"],
+            "yetkili_id": yetkili.id,
+            "tarih": datetime.now().strftime("%d/%m/%Y %H:%M"),
+            "log_msg_id": msg_id,
+            "kanit_url": None,
+            "aktif": True
+        })
+        save_user_data(str(hedef.id), u_data)
         
         kanit_view = KanitGorselView(uyari_id, hedef.id, UYARILAR_KANAL_ID)
         await interaction.response.send_message(f"✅ **{hedef.display_name}** — {sonuc}", view=kanit_view, ephemeral=True)
@@ -1086,6 +1177,307 @@ class UyariSistemi(commands.Cog):
                 pass
         
         await interaction.followup.send(f"✅ {kisi.mention} kişisinin tüm uyarıları ve uyarı puanı sıfırlandı, varsa rolleri kaldırıldı.\n*(Uyarı kanalındaki log kayıtlarına dokunulmadı).* ", ephemeral=True)
+
+    @app_commands.command(name="uyari-iptal", description="Hatalı verilen bir uyarıyı ID'si ile iptal eder ve uygulanan işlemleri geri alır.")
+    @app_commands.describe(uyari_id="İptal edilecek uyarının ID'si (Örn: A1B2 veya #A1B2)")
+    async def uyari_iptal(self, interaction: discord.Interaction, uyari_id: str):
+        if not (kullanici_yetkili_mi(interaction.user) or yonetim_mi(interaction.user) or interaction.user.guild_permissions.administrator):
+            return await interaction.response.send_message("❌ Bu komutu sadece yetkililer kullanabilir!", ephemeral=True)
+
+        await interaction.response.defer(ephemeral=True)
+
+        clean_id = uyari_id.strip().upper().replace("#", "")
+        guild = interaction.guild
+        data = load_data(UYARI_DATA_FILE)
+
+        hedef_uid = None
+        hedef_uyari = None
+        hedef_index = -1
+
+        # 1. Adım: Veritabanında uyarı ID'sini ara
+        for uid, udata in data.items():
+            for idx, u in enumerate(udata.get("uyarilar", [])):
+                if u.get("id") == clean_id:
+                    hedef_uid = uid
+                    hedef_uyari = u
+                    hedef_index = idx
+                    break
+            if hedef_uyari:
+                break
+
+        # 2. Adım: Uyarı kanalı mesajını bul
+        uyari_kanali = guild.get_channel(UYARILAR_KANAL_ID)
+        if not uyari_kanali:
+            try:
+                uyari_kanali = await self.bot.fetch_channel(UYARILAR_KANAL_ID)
+            except Exception:
+                uyari_kanali = None
+
+        channel_msg = None
+        if uyari_kanali:
+            # Kayıtlı log_msg_id varsa doğrudan çek
+            if hedef_uyari and hedef_uyari.get("log_msg_id"):
+                try:
+                    channel_msg = await uyari_kanali.fetch_message(int(hedef_uyari["log_msg_id"]))
+                except Exception:
+                    channel_msg = None
+
+            # Eğer mesaj bulunamadıysa kanal geçmişini tara
+            if not channel_msg:
+                try:
+                    async for m in uyari_kanali.history(limit=100):
+                        if m.author == self.bot.user and m.embeds:
+                            for emb in m.embeds:
+                                text_all = f"{emb.title or ''} {emb.description or ''} {emb.footer.text if emb.footer else ''}"
+                                if f"#{clean_id}" in text_all or f"ID: #{clean_id}" in text_all or clean_id in text_all:
+                                    channel_msg = m
+                                    if not hedef_uid:
+                                        if m.mentions:
+                                            hedef_uid = str(m.mentions[0].id)
+                                        elif emb.description:
+                                            import re
+                                            match = re.search(r'<@!?(\d+)>', emb.description)
+                                            if match:
+                                                hedef_uid = match.group(1)
+                                    break
+                        if channel_msg:
+                            break
+                except Exception:
+                    pass
+
+        # Eğer uyarı hiçbir yerde bulunamadıysa
+        if not hedef_uyari and not channel_msg and not hedef_uid:
+            return await interaction.followup.send(
+                f"❌ `#{clean_id}` kodlu bir uyarı bulunamadı! Lütfen uyarı ID'sini kontrol edin.",
+                ephemeral=True
+            )
+
+        # Kullanıcı nesnesini al
+        hedef_member = None
+        hedef_user = None
+        if hedef_uid:
+            hedef_member = guild.get_member(int(hedef_uid))
+            if not hedef_member:
+                try:
+                    hedef_member = await guild.fetch_member(int(hedef_uid))
+                except Exception:
+                    hedef_member = None
+            if not hedef_member:
+                try:
+                    hedef_user = await self.bot.fetch_user(int(hedef_uid))
+                except Exception:
+                    hedef_user = None
+            else:
+                hedef_user = hedef_member
+
+        yapilanlar = []
+        madde_kodu = hedef_uyari.get("madde") if hedef_uyari else None
+        puan = hedef_uyari.get("puan", 0) if hedef_uyari else 0
+        ozel = hedef_uyari.get("ozel") if hedef_uyari else None
+        is_yetkili_uyari = hedef_uyari.get("yetkili_uyari", False) if hedef_uyari else False
+
+        # DB'de yoksa embed metninden bilgileri çıkar
+        if not madde_kodu and channel_msg and channel_msg.embeds:
+            import re
+            emb = channel_msg.embeds[0]
+            match = re.search(r'\*\*(M\d+|D\d+|RM\d+|Y\d+)', emb.description or "")
+            if match:
+                madde_kodu = match.group(1)
+                bilgi = MADDELER.get(madde_kodu) or YETKILI_MADDELER.get(madde_kodu)
+                if bilgi:
+                    puan = bilgi.get("puan", 0)
+                    ozel = bilgi.get("ozel")
+
+        # 1. BAN KALDIRMA
+        if hedef_user:
+            try:
+                ban_entry = await guild.fetch_ban(hedef_user)
+                if ban_entry:
+                    await guild.unban(hedef_user, reason=f"Hatalı uyarı iptal edildi (#{clean_id}) — {interaction.user}")
+                    yapilanlar.append("🚫 **Kalıcı Yasak (Ban)** kaldırıldı.")
+            except (discord.NotFound, discord.HTTPException):
+                pass
+
+        # 2. TIMEOUT KALDIRMA
+        if hedef_member:
+            is_timed_out = False
+            try:
+                if hasattr(hedef_member, 'is_timed_out') and hedef_member.is_timed_out():
+                    is_timed_out = True
+                elif getattr(hedef_member, 'timed_out_until', None) is not None:
+                    is_timed_out = hedef_member.timed_out_until > discord.utils.utcnow()
+            except Exception:
+                pass
+
+            if is_timed_out or (ozel and "timeout" in ozel):
+                try:
+                    await hedef_member.timeout(None, reason=f"Hatalı uyarı iptal edildi (#{clean_id}) — {interaction.user}")
+                    yapilanlar.append("⏳ **Zaman Aşımı (Timeout)** kaldırıldı.")
+                except Exception:
+                    pass
+
+        # 3. PUAN VE KADEME DÜŞÜRME
+        if hedef_uid and hedef_uid in data:
+            user_data = data[hedef_uid]
+            if puan > 0:
+                eski_puan = user_data.get("toplam_puan", 0)
+                yeni_puan = max(0, eski_puan - puan)
+                user_data["toplam_puan"] = yeni_puan
+                yeni_kademe = hesapla_kademe(yeni_puan)
+                user_data["kademe"] = yeni_kademe
+                yapilanlar.append(f"📉 **{puan} Uyarı Puanı** silindi (Yeni Toplam Puan: **{yeni_puan}**).")
+
+                # Uyarı rollerini güncelle
+                if hedef_member:
+                    eski_roller = [guild.get_role(r) for r in TUM_UYARI_ROLLERI if guild.get_role(r) and guild.get_role(r) in hedef_member.roles]
+                    if eski_roller:
+                        try:
+                            await hedef_member.remove_roles(*eski_roller, reason=f"Uyarı iptal edildi (#{clean_id})")
+                        except discord.Forbidden:
+                            pass
+                    if yeni_kademe > 0:
+                        yeni_rol = guild.get_role(UYARI_KADEME_ROLLERI[yeni_kademe])
+                        if yeni_rol:
+                            try:
+                                await hedef_member.add_roles(yeni_rol, reason=f"Uyarı kademe düzeltildi (#{clean_id})")
+                                yapilanlar.append(f"🏷️ Uyarı rolü **Kademe {yeni_kademe}** olarak güncellendi.")
+                            except discord.Forbidden:
+                                pass
+                    else:
+                        yapilanlar.append("🏷️ Tüm uyarı rolleri kaldırıldı.")
+
+                # Jail kontrolü (Puan 15'in altına indiyse)
+                if yeni_kademe < 5:
+                    jail_rol = guild.get_role(JAIL_ROL)
+                    if jail_rol and hedef_member and jail_rol in hedef_member.roles:
+                        try:
+                            await hedef_member.remove_roles(jail_rol, reason=f"Uyarı iptal - Jail kaldırıldı (#{clean_id})")
+                            yapilanlar.append("⛓️ **Jail Rolü** kaldırıldı.")
+                        except discord.Forbidden:
+                            pass
+                    user_data["jail_bitis"] = None
+
+        # 4. YASAKLI ROLÜ İPTALİ (M9)
+        if ozel == "yasakli" or madde_kodu == "M9":
+            yasakli_rol = guild.get_role(YASAKLI_ROL)
+            if yasakli_rol and hedef_member and yasakli_rol in hedef_member.roles:
+                try:
+                    await hedef_member.remove_roles(yasakli_rol, reason=f"Uyarı iptal edildi (#{clean_id})")
+                    yapilanlar.append("🚫 **Yasaklı Rolü** kaldırıldı.")
+                except discord.Forbidden:
+                    pass
+                uye_rol = guild.get_role(1533919249985437706)
+                wl_rol = guild.get_role(1533908873772273715)
+                iade = [r for r in [uye_rol, wl_rol] if r and r not in hedef_member.roles]
+                if iade:
+                    try:
+                        await hedef_member.add_roles(*iade, reason=f"Uyarı iptal - roller iade (#{clean_id})")
+                        yapilanlar.append("👥 **Üye / Whitelist** rolleri iade edildi.")
+                    except discord.Forbidden:
+                        pass
+
+        # 5. YETKİLİ UYARISI İPTALİ
+        if is_yetkili_uyari or (madde_kodu and madde_kodu in YETKILI_MADDELER):
+            if hedef_member:
+                y3 = guild.get_role(YETKILI_UYARI_3)
+                y2 = guild.get_role(YETKILI_UYARI_2)
+                y1 = guild.get_role(YETKILI_UYARI_1)
+                if y3 and y3 in hedef_member.roles:
+                    try:
+                        await hedef_member.remove_roles(y3, reason=f"Yetkili uyarısı iptal (#{clean_id})")
+                        if y2: await hedef_member.add_roles(y2, reason="Seviye düşürüldü")
+                        yapilanlar.append("🛡️ **Yetkili Uyarı 3** kaldırıldı, **Yetkili Uyarı 2** verildi.")
+                    except discord.Forbidden:
+                        pass
+                elif y2 and y2 in hedef_member.roles:
+                    try:
+                        await hedef_member.remove_roles(y2, reason=f"Yetkili uyarısı iptal (#{clean_id})")
+                        if y1: await hedef_member.add_roles(y1, reason="Seviye düşürüldü")
+                        yapilanlar.append("🛡️ **Yetkili Uyarı 2** kaldırıldı, **Yetkili Uyarı 1** verildi.")
+                    except discord.Forbidden:
+                        pass
+                elif y1 and y1 in hedef_member.roles:
+                    try:
+                        await hedef_member.remove_roles(y1, reason=f"Yetkili uyarısı iptal (#{clean_id})")
+                        yapilanlar.append("🛡️ **Yetkili Uyarı 1** kaldırıldı.")
+                    except discord.Forbidden:
+                        pass
+
+        # 6. VERİTABANINDAN ÇIKAR VE SENKRONİZE ET
+        if hedef_uid and hedef_uid in data:
+            u_list = data[hedef_uid].get("uyarilar", [])
+            if hedef_index != -1 and hedef_index < len(u_list):
+                u_list.pop(hedef_index)
+            else:
+                data[hedef_uid]["uyarilar"] = [u for u in u_list if u.get("id") != clean_id]
+
+            if data[hedef_uid].get("uyarilar"):
+                data[hedef_uid]["son_uyari_tarihi"] = data[hedef_uid]["uyarilar"][-1].get("tarih")
+            else:
+                data[hedef_uid]["son_uyari_tarihi"] = None
+            save_data(UYARI_DATA_FILE, data)
+            _sync_post_bg("/api/sync/uyari", {
+                "userId": hedef_uid,
+                "newPoints": data[hedef_uid].get("toplam_puan", 0),
+                "newTier": data[hedef_uid].get("kademe", 0)
+            })
+
+        # 7. SİCİL KAYDINDAN SİL
+        sicil_data = load_data(SICIL_DATA_FILE)
+        if hedef_uid and hedef_uid in sicil_data:
+            s_list = sicil_data[hedef_uid]
+            silindi_sicil = False
+            if madde_kodu:
+                for i in range(len(s_list) - 1, -1, -1):
+                    if s_list[i].get("madde") == madde_kodu:
+                        s_list.pop(i)
+                        silindi_sicil = True
+                        break
+            if not silindi_sicil and s_list:
+                s_list.pop()
+            save_data(SICIL_DATA_FILE, sicil_data)
+            yapilanlar.append("📜 Sicil kaydı temizlendi.")
+
+        # 8. UYARI KANALINDAKİ LOG MESAJINI SİL
+        if channel_msg:
+            try:
+                await channel_msg.delete()
+                yapilanlar.append("🗑️ Uyarı kanalı log mesajı silindi.")
+            except Exception:
+                pass
+
+        # 9. BİLDİRİM VE AUDIT LOG
+        hedef_etiket = hedef_user.mention if hedef_user else f"`{hedef_uid}`"
+
+        embed = discord.Embed(
+            title="↩️ Uyarı Başarıyla İptal Edildi",
+            description=f"**Uyarı ID:** `#{clean_id}`\n"
+                        f"**Kullanıcı:** {hedef_etiket}\n"
+                        f"**İhlal Maddesi:** **{madde_kodu or 'Bilinmiyor'}**\n"
+                        f"**İptal Eden Yetkili:** {interaction.user.mention}\n\n"
+                        f"### 📋 Geri Alınan İşlemler:\n" + ("\n".join([f"• {islem}" for islem in yapilanlar]) if yapilanlar else "• Kayıt veritabanından silindi."),
+            color=discord.Color.green()
+        )
+        embed.set_footer(text="Piyade RP • Uyarı İptal Sistemi")
+        embed.timestamp = discord.utils.utcnow()
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+        sicil_kanal = guild.get_channel(SICIL_LOG_KANAL_ID)
+        if sicil_kanal:
+            s_embed = discord.Embed(
+                title="↩️ Hatalı Uyarı İptal Edildi",
+                description=f"**Uyarı ID:** `#{clean_id}`\n"
+                            f"**Kullanıcı:** {hedef_etiket}\n"
+                            f"**İptal Eden Yetkili:** {interaction.user.mention}\n"
+                            f"**İhlal Maddesi:** {madde_kodu or '—'}\n\n"
+                            f"**Geri Alınan İşlemler:**\n" + ("\n".join([f"• {x}" for x in yapilanlar]) if yapilanlar else "• Kayıt silindi."),
+                color=discord.Color.orange()
+            )
+            s_embed.timestamp = discord.utils.utcnow()
+            try:
+                await sicil_kanal.send(embed=s_embed)
+            except Exception:
+                pass
 
 
 async def setup(bot):
