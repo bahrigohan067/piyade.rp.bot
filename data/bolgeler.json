@@ -135,5 +135,204 @@
         "street": "RoadAlignmentIndicator_Left (No: 2101)"
       }
     ]
+  },
+  "fire_department_2": {
+    "name": "Fire Departman 2 (Safezone)",
+    "type": "safezone",
+    "postal_codes": [
+      "228"
+    ],
+    "points": [
+      {
+        "x": 1281.5,
+        "z": 3631.9,
+        "postal_code": "228",
+        "street": "Fire Dept 2 Bölgesi"
+      },
+      {
+        "x": 1281.3,
+        "z": 3482.4,
+        "postal_code": "228",
+        "street": "Fire Dept 2 Bölgesi"
+      },
+      {
+        "x": 1215.2,
+        "z": 3480.2,
+        "postal_code": "228",
+        "street": "Fire Dept 2 Bölgesi"
+      },
+      {
+        "x": 1213.8,
+        "z": 3634.0,
+        "postal_code": "228",
+        "street": "Fire Dept 2 Bölgesi"
+      }
+    ]
+  },
+  "hastane": {
+    "name": "Hastane (Safezone)",
+    "type": "safezone",
+    "postal_codes": [
+      "322"
+    ],
+    "points": [
+      {
+        "x": 2612.0,
+        "z": 3261.6,
+        "postal_code": "322",
+        "street": "Hastane Safezone"
+      },
+      {
+        "x": 2786.2,
+        "z": 3261.7,
+        "postal_code": "322",
+        "street": "Hastane Safezone"
+      },
+      {
+        "x": 2787.4,
+        "z": 3356.6,
+        "postal_code": "322",
+        "street": "Hastane Safezone"
+      },
+      {
+        "x": 2609.5,
+        "z": 3357.0,
+        "postal_code": "322",
+        "street": "Hastane Safezone"
+      }
+    ]
+  },
+  "hapishane": {
+    "name": "Hapishane (Safezone)",
+    "type": "safezone",
+    "postal_codes": [
+      "301"
+    ],
+    "points": [
+      {
+        "x": 3477.3,
+        "z": 2907.1,
+        "postal_code": "301",
+        "street": "Hapishane Safezone"
+      },
+      {
+        "x": 3558.3,
+        "z": 2841.9,
+        "postal_code": "301",
+        "street": "Hapishane Safezone"
+      },
+      {
+        "x": 3483.6,
+        "z": 2751.3,
+        "postal_code": "301",
+        "street": "Hapishane Safezone"
+      },
+      {
+        "x": 3402.4,
+        "z": 2818.4,
+        "postal_code": "301",
+        "street": "Hapishane Safezone"
+      }
+    ]
+  },
+  "campton_spawn": {
+    "name": "Campton Spawn (Safezone)",
+    "type": "safezone",
+    "postal_codes": [
+      "1102"
+    ],
+    "points": [
+      {
+        "x": 4065.5,
+        "z": 1377.0,
+        "postal_code": "1102",
+        "street": "Campton Spawn Safezone"
+      },
+      {
+        "x": 4065.6,
+        "z": 1434.7,
+        "postal_code": "1102",
+        "street": "Campton Spawn Safezone"
+      },
+      {
+        "x": 3927.5,
+        "z": 1434.6,
+        "postal_code": "1102",
+        "street": "Campton Spawn Safezone"
+      },
+      {
+        "x": 3926.2,
+        "z": 1371.8,
+        "postal_code": "1102",
+        "street": "Campton Spawn Safezone"
+      }
+    ]
+  },
+  "gun_shop_campton": {
+    "name": "Gunshop Campton (Safezone)",
+    "type": "safezone_and_shop",
+    "maksimum_mesafe": 6.0,
+    "postal_codes": [
+      "1105"
+    ],
+    "points": [
+      {
+        "x": 3958.9,
+        "z": 1288.1,
+        "postal_code": "1105",
+        "street": "Campton Gunshop"
+      },
+      {
+        "x": 3960.5,
+        "z": 1269.6,
+        "postal_code": "1105",
+        "street": "Campton Gunshop"
+      },
+      {
+        "x": 3934.7,
+        "z": 1269.6,
+        "postal_code": "1105",
+        "street": "Campton Gunshop"
+      },
+      {
+        "x": 3933.7,
+        "z": 1288.4,
+        "postal_code": "1105",
+        "street": "Campton Gunshop"
+      }
+    ]
+  },
+  "sheriff_department": {
+    "name": "Sheriff Departmanı (Safezone)",
+    "type": "safezone",
+    "postal_codes": [
+      "1101"
+    ],
+    "points": [
+      {
+        "x": 3643.6,
+        "z": 1331.5,
+        "postal_code": "1101",
+        "street": "Sheriff Departmanı Safezone"
+      },
+      {
+        "x": 3643.2,
+        "z": 1472.1,
+        "postal_code": "1101",
+        "street": "Sheriff Departmanı Safezone"
+      },
+      {
+        "x": 3506.5,
+        "z": 1473.3,
+        "postal_code": "1101",
+        "street": "Sheriff Departmanı Safezone"
+      },
+      {
+        "x": 3507.5,
+        "z": 1331.0,
+        "postal_code": "1101",
+        "street": "Sheriff Departmanı Safezone"
+      }
+    ]
   }
 }

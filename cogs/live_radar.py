@@ -82,6 +82,66 @@ TANIMLI_BOLGELER = {
             {"x": 1615.94, "z": 3845.71},
             {"x": 1464.1, "z": 3843.23}
         ]
+    },
+    "fire_department_2": {
+        "name": "Fire Departman 2 (Safezone)",
+        "postal_codes": ["228"],
+        "points": [
+            {"x": 1281.5, "z": 3631.9},
+            {"x": 1281.3, "z": 3482.4},
+            {"x": 1215.2, "z": 3480.2},
+            {"x": 1213.8, "z": 3634.0}
+        ]
+    },
+    "hastane": {
+        "name": "Hastane (Safezone)",
+        "postal_codes": ["322"],
+        "points": [
+            {"x": 2612.0, "z": 3261.6},
+            {"x": 2786.2, "z": 3261.7},
+            {"x": 2787.4, "z": 3356.6},
+            {"x": 2609.5, "z": 3357.0}
+        ]
+    },
+    "hapishane": {
+        "name": "Hapishane (Safezone)",
+        "postal_codes": ["301"],
+        "points": [
+            {"x": 3477.3, "z": 2907.1},
+            {"x": 3558.3, "z": 2841.9},
+            {"x": 3483.6, "z": 2751.3},
+            {"x": 3402.4, "z": 2818.4}
+        ]
+    },
+    "campton_spawn": {
+        "name": "Campton Spawn (Safezone)",
+        "postal_codes": ["1102"],
+        "points": [
+            {"x": 4065.5, "z": 1377.0},
+            {"x": 4065.6, "z": 1434.7},
+            {"x": 3927.5, "z": 1434.6},
+            {"x": 3926.2, "z": 1371.8}
+        ]
+    },
+    "gun_shop_campton": {
+        "name": "Gunshop Campton (Safezone)",
+        "postal_codes": ["1105"],
+        "points": [
+            {"x": 3958.9, "z": 1288.1},
+            {"x": 3960.5, "z": 1269.6},
+            {"x": 3934.7, "z": 1269.6},
+            {"x": 3933.7, "z": 1288.4}
+        ]
+    },
+    "sheriff_department": {
+        "name": "Sheriff Departmanı (Safezone)",
+        "postal_codes": ["1101"],
+        "points": [
+            {"x": 3643.6, "z": 1331.5},
+            {"x": 3643.2, "z": 1472.1},
+            {"x": 3506.5, "z": 1473.3},
+            {"x": 3507.5, "z": 1331.0}
+        ]
     }
 }
 
