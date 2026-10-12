@@ -183,6 +183,32 @@ def fetch_user_from_site(uid: str):
         return None
     return None
 
+def fetch_uyari_by_id_from_site(clean_id: str):
+    """Web sitesi API'sinden uyarı ID'sine göre uyarının ve kullanıcının verisini çeker."""
+    bot_token = os.getenv("TOKEN") or os.getenv("DISCORD_BOT_TOKEN")
+    site_url = os.getenv("SITE_URL", "https://piyade-rp.up.railway.app").rstrip("/")
+    if not bot_token or not site_url:
+        return None
+    url = f"{site_url}/api/sync/uyari?uyariId={clean_id}"
+    try:
+        req = urllib.request.Request(
+            url,
+            headers={
+                "Authorization": f"Bearer {bot_token}",
+                "x-bot-token": bot_token
+            },
+            method="GET"
+        )
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            if resp.status == 200:
+                res_data = json.loads(resp.read().decode("utf-8"))
+                if res_data and res_data.get("found"):
+                    return res_data
+    except Exception:
+        return None
+    return None
+
+
 def fetch_sicil_from_site(uid: str):
     """Web sitesi API'sinden kullanıcının güncel sicil kayıtlarını çeker."""
     bot_token = os.getenv("TOKEN") or os.getenv("DISCORD_BOT_TOKEN")
@@ -257,7 +283,7 @@ def hesapla_kademe(toplam_puan: int) -> int:
         return 1
     return 0
 
-def add_sicil_record(user_id: int, madde: str, aciklama: str, yetkili_id: int, sonuc: str):
+def add_sicil_record(user_id: int, madde: str, aciklama: str, yetkili_id: int, sonuc: str, uyari_id: str = None):
     """Sicil dosyasına kayıt ekler ve web sitesiyle senkronize eder."""
     data = load_data(SICIL_DATA_FILE)
     uid = str(user_id)
@@ -270,6 +296,8 @@ def add_sicil_record(user_id: int, madde: str, aciklama: str, yetkili_id: int, s
         "yetkili_id": yetkili_id,
         "sonuc": sonuc
     }
+    if uyari_id:
+        record["uyari_id"] = uyari_id
     data[uid].append(record)
     save_data(SICIL_DATA_FILE, data)
 
@@ -1205,6 +1233,21 @@ class UyariSistemi(commands.Cog):
             if hedef_uyari:
                 break
 
+        # 1.1 Adım: Web Sitesi API'sinden Ara (Siteden verilen uyarılar için canlı sorgu)
+        if not hedef_uyari:
+            remote_res = fetch_uyari_by_id_from_site(clean_id)
+            if remote_res and remote_res.get("found"):
+                hedef_uid = str(remote_res.get("userId"))
+                hedef_uyari = remote_res.get("uyari")
+                remote_user = remote_res.get("user")
+                if remote_user and hedef_uid:
+                    data[hedef_uid] = remote_user
+                    save_data(UYARI_DATA_FILE, data)
+                    for idx, u in enumerate(data[hedef_uid].get("uyarilar", [])):
+                        if u.get("id") == clean_id:
+                            hedef_index = idx
+                            break
+
         # 2. Adım: Uyarı kanalı mesajını bul
         uyari_kanali = guild.get_channel(UYARILAR_KANAL_ID)
         if not uyari_kanali:
@@ -1251,6 +1294,10 @@ class UyariSistemi(commands.Cog):
                 f"❌ `#{clean_id}` kodlu bir uyarı bulunamadı! Lütfen uyarı ID'sini kontrol edin.",
                 ephemeral=True
             )
+
+        # Kullanıcı verisini yükle/senkronize et
+        if hedef_uid and hedef_uid not in data:
+            data[hedef_uid] = get_user_data(hedef_uid)
 
         # Kullanıcı nesnesini al
         hedef_member = None
@@ -1317,45 +1364,59 @@ class UyariSistemi(commands.Cog):
                     pass
 
         # 3. PUAN VE KADEME DÜŞÜRME
-        if hedef_uid and hedef_uid in data:
-            user_data = data[hedef_uid]
+        if hedef_uid:
+            user_data = data.setdefault(hedef_uid, {
+                "uyarilar": [],
+                "toplam_puan": 0,
+                "kademe": 0,
+                "son_uyari_tarihi": None,
+                "jail_bitis": None
+            })
+            eski_puan = user_data.get("toplam_puan", 0)
+
+            # DB'de puan 0 gözüküyorsa ama üyede kademe rolü varsa role göre tespit et
+            if eski_puan == 0 and hedef_member:
+                for tier, r_id in UYARI_KADEME_ROLLERI.items():
+                    if guild.get_role(r_id) and guild.get_role(r_id) in hedef_member.roles:
+                        eski_puan = max(eski_puan, tier * 3)
+
+            yeni_puan = max(0, eski_puan - puan)
+            user_data["toplam_puan"] = yeni_puan
+            yeni_kademe = hesapla_kademe(yeni_puan)
+            user_data["kademe"] = yeni_kademe
             if puan > 0:
-                eski_puan = user_data.get("toplam_puan", 0)
-                yeni_puan = max(0, eski_puan - puan)
-                user_data["toplam_puan"] = yeni_puan
-                yeni_kademe = hesapla_kademe(yeni_puan)
-                user_data["kademe"] = yeni_kademe
                 yapilanlar.append(f"📉 **{puan} Uyarı Puanı** silindi (Yeni Toplam Puan: **{yeni_puan}**).")
 
-                # Uyarı rollerini güncelle
-                if hedef_member:
-                    eski_roller = [guild.get_role(r) for r in TUM_UYARI_ROLLERI if guild.get_role(r) and guild.get_role(r) in hedef_member.roles]
+            # Uyarı rollerini güncelle
+            if hedef_member:
+                eski_roller = [guild.get_role(r) for r in TUM_UYARI_ROLLERI if guild.get_role(r) and guild.get_role(r) in hedef_member.roles]
+                if eski_roller:
+                    try:
+                        await hedef_member.remove_roles(*eski_roller, reason=f"Uyarı iptal edildi (#{clean_id})")
+                    except discord.Forbidden:
+                        pass
+                if yeni_kademe > 0:
+                    yeni_rol = guild.get_role(UYARI_KADEME_ROLLERI[yeni_kademe])
+                    if yeni_rol:
+                        try:
+                            await hedef_member.add_roles(yeni_rol, reason=f"Uyarı kademe düzeltildi (#{clean_id})")
+                            yapilanlar.append(f"🏷️ Uyarı rolü **Kademe {yeni_kademe}** olarak güncellendi.")
+                        except discord.Forbidden:
+                            pass
+                else:
                     if eski_roller:
-                        try:
-                            await hedef_member.remove_roles(*eski_roller, reason=f"Uyarı iptal edildi (#{clean_id})")
-                        except discord.Forbidden:
-                            pass
-                    if yeni_kademe > 0:
-                        yeni_rol = guild.get_role(UYARI_KADEME_ROLLERI[yeni_kademe])
-                        if yeni_rol:
-                            try:
-                                await hedef_member.add_roles(yeni_rol, reason=f"Uyarı kademe düzeltildi (#{clean_id})")
-                                yapilanlar.append(f"🏷️ Uyarı rolü **Kademe {yeni_kademe}** olarak güncellendi.")
-                            except discord.Forbidden:
-                                pass
-                    else:
-                        yapilanlar.append("🏷️ Tüm uyarı rolleri kaldırıldı.")
+                        yapilanlar.append("🏷️ Ceza puanı 0'a indiği için Uyarı Rolü kaldırıldı.")
 
-                # Jail kontrolü (Puan 15'in altına indiyse)
-                if yeni_kademe < 5:
-                    jail_rol = guild.get_role(JAIL_ROL)
-                    if jail_rol and hedef_member and jail_rol in hedef_member.roles:
-                        try:
-                            await hedef_member.remove_roles(jail_rol, reason=f"Uyarı iptal - Jail kaldırıldı (#{clean_id})")
-                            yapilanlar.append("⛓️ **Jail Rolü** kaldırıldı.")
-                        except discord.Forbidden:
-                            pass
-                    user_data["jail_bitis"] = None
+            # Jail kontrolü (Puan 15'in altına indiyse)
+            if yeni_kademe < 5:
+                jail_rol = guild.get_role(JAIL_ROL)
+                if jail_rol and hedef_member and jail_rol in hedef_member.roles:
+                    try:
+                        await hedef_member.remove_roles(jail_rol, reason=f"Uyarı iptal - Jail kaldırıldı (#{clean_id})")
+                        yapilanlar.append("⛓️ **Jail Rolü** kaldırıldı.")
+                    except discord.Forbidden:
+                        pass
+                user_data["jail_bitis"] = None
 
         # 4. YASAKLI ROLÜ İPTALİ (M9)
         if ozel == "yasakli" or madde_kodu == "M9":
@@ -1403,8 +1464,8 @@ class UyariSistemi(commands.Cog):
                     except discord.Forbidden:
                         pass
 
-        # 6. VERİTABANINDAN ÇIKAR VE SENKRONİZE ET
-        if hedef_uid and hedef_uid in data:
+        # 6. VERİTABANINDAN ÇIKAR VE WEB SİTESİYLE SENKRONİZE ET
+        if hedef_uid:
             u_list = data[hedef_uid].get("uyarilar", [])
             if hedef_index != -1 and hedef_index < len(u_list):
                 u_list.pop(hedef_index)
@@ -1416,8 +1477,12 @@ class UyariSistemi(commands.Cog):
             else:
                 data[hedef_uid]["son_uyari_tarihi"] = None
             save_data(UYARI_DATA_FILE, data)
+
             _sync_post_bg("/api/sync/uyari", {
+                "action": "cancel",
                 "userId": hedef_uid,
+                "uyariId": clean_id,
+                "madde": madde_kodu,
                 "newPoints": data[hedef_uid].get("toplam_puan", 0),
                 "newTier": data[hedef_uid].get("kademe", 0)
             })
@@ -1427,7 +1492,13 @@ class UyariSistemi(commands.Cog):
         if hedef_uid and hedef_uid in sicil_data:
             s_list = sicil_data[hedef_uid]
             silindi_sicil = False
-            if madde_kodu:
+            for i in range(len(s_list) - 1, -1, -1):
+                rec = s_list[i]
+                if rec.get("uyari_id") == clean_id or (clean_id in (rec.get("aciklama", "") + rec.get("sonuc", ""))):
+                    s_list.pop(i)
+                    silindi_sicil = True
+                    break
+            if not silindi_sicil and madde_kodu:
                 for i in range(len(s_list) - 1, -1, -1):
                     if s_list[i].get("madde") == madde_kodu:
                         s_list.pop(i)
@@ -1436,7 +1507,7 @@ class UyariSistemi(commands.Cog):
             if not silindi_sicil and s_list:
                 s_list.pop()
             save_data(SICIL_DATA_FILE, sicil_data)
-            yapilanlar.append("📜 Sicil kaydı temizlendi.")
+            yapilanlar.append("📜 Bu uyarıya ait sicil kaydı silindi.")
 
         # 8. UYARI KANALINDAKİ LOG MESAJINI SİL
         if channel_msg:
