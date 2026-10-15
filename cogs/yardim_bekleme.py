@@ -331,6 +331,12 @@ class YardimBekleme(commands.Cog):
             except Exception:
                 pass
             
+            # Rol saatleri dışı (TSİ gece 01:00 - öğlen 12:00 arası) log bildirimi gönderilmez
+            tz_tr = datetime.timezone(datetime.timedelta(hours=3))
+            tr_saat = datetime.datetime.now(tz_tr).time()
+            if datetime.time(1, 0) <= tr_saat < datetime.time(12, 0):
+                return
+
             kanal = self.bot.get_channel(ONEMLI_LOG_KANALI)
             if kanal:
                 embed = discord.Embed(
