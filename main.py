@@ -42,7 +42,6 @@ class MyBot(commands.Bot):
             CKKararButonu,
             OnayView,
         )
-        from cogs.tickets import TicketPanelView, CloseTicketView
         from cogs.vs_talep import VSSetupView, VSChannelView
         from cogs.uyari_sistemi import UyariPanel
         from cogs.rol_secim import RolSecimView
@@ -50,7 +49,6 @@ class MyBot(commands.Bot):
         from cogs.yonetim_paneli import YonetimButonView
         from cogs.cete_sistemi import GangPanelView, AdminGangPanelView
         from cogs.rp_oylama import RPOylamaView
-        from cogs.yardim_bekleme import DevralView, DestekAktifView
         from cogs.mod_cagri import ModCagriView
         from cogs.envanter_sistemi import (
             ATMView,
@@ -67,8 +65,6 @@ class MyBot(commands.Bot):
         self.add_view(MevcutUyePanelView())
         self.add_view(OnayView(user_id=None))
         self.add_dynamic_items(KayitKararButonu, KarakterKararButonu, CKKararButonu)
-        self.add_view(TicketPanelView())
-        self.add_view(CloseTicketView())
         self.add_view(UyariPanel())
         self.add_view(VSSetupView())
         self.add_view(VSChannelView())
@@ -78,8 +74,6 @@ class MyBot(commands.Bot):
         self.add_view(GangPanelView())
         self.add_view(AdminGangPanelView())
         self.add_view(RPOylamaView())
-        self.add_view(DevralView())
-        self.add_view(DestekAktifView())
         self.add_view(ModCagriView())
         self.add_view(ATMView())
         self.add_view(MarketView())
