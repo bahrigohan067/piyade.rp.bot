@@ -49,7 +49,6 @@ class MyBot(commands.Bot):
         from cogs.yonetim_paneli import YonetimButonView
         from cogs.cete_sistemi import GangPanelView, AdminGangPanelView
         from cogs.rp_oylama import RPOylamaView
-        from cogs.mod_cagri import ModCagriView
         from cogs.envanter_sistemi import (
             ATMView,
             MarketView,
@@ -74,7 +73,6 @@ class MyBot(commands.Bot):
         self.add_view(GangPanelView())
         self.add_view(AdminGangPanelView())
         self.add_view(RPOylamaView())
-        self.add_view(ModCagriView())
         self.add_view(ATMView())
         self.add_view(MarketView())
         self.add_view(GunshopView())

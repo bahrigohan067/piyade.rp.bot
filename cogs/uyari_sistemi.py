@@ -98,6 +98,7 @@ MADDELER = {
     "RM15": {"puan": 1, "aciklama": "Kaza RP Yapmama", "ozel": None},
     "RM16": {"puan": 2, "aciklama": "Refuse RP (Rolü Reddetmek)", "ozel": None},
     "RM17": {"puan": 5, "aciklama": "Abuse (Oyun Açığı Suistimali)", "ozel": None},
+    "RM18": {"puan": 2, "aciklama": "SafeZone İhlali", "ozel": None},
 }
 
 # Yetkili Kuralları (puan sistemi yok, uyarı sayısı bazlı)
@@ -443,7 +444,7 @@ class ResmiUyariModal(discord.ui.Modal, title="Uyarı - Madde Numarası"):
         # Normal maddeler (M1-M12, D1-D3)
         if madde_kodu not in MADDELER:
             return await interaction.response.send_message(
-                "❌ Geçersiz madde numarası! Geçerli maddeler: M1-M13, D1-D3, RM1-RM17, Y1-Y5", ephemeral=True)
+                "❌ Geçersiz madde numarası! Geçerli maddeler: M1-M13, D1-D3, RM1-RM18, Y1-Y5", ephemeral=True)
         
         if hedef_yetkili and madde_kodu not in YETKILI_MADDELER:
             # Yetkililere normal madde uygulanabilir (M kuralları onlar için de geçerli)
@@ -754,7 +755,7 @@ class ResmiUyariModal(discord.ui.Modal, title="Uyarı - Madde Numarası"):
             except:
                 pass
 
-        # Y2-Y5, RM1-RM17: Yetkili uyarı sayısı +1
+        # Y2-Y5, RM1-RM18: Yetkili uyarı sayısı +1
         roller = [r.id for r in hedef.roles]
         mevcut_seviye = 0
         if YETKILI_UYARI_3 in roller: mevcut_seviye = 3
@@ -1101,7 +1102,7 @@ class UyariSistemi(commands.Cog):
                 "→ Uyarı alacak kişiyi seç.\n"
                 "→ Karşına çıkan madde numarasını doldur.\n"
                 "→ Kanıt görseli varsa yükle.\n\n"
-                "**Katılımcı Maddeleri:** M1-M13, D1-D3, RM1-RM17\n"
+                "**Katılımcı Maddeleri:** M1-M13, D1-D3, RM1-RM18\n"
                 "**Yetkili Maddeleri:** Y1-Y5"
             ),
             color=discord.Color.red()
