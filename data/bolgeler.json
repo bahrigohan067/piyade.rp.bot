@@ -334,5 +334,39 @@
         "street": "Sheriff Departmanı Safezone"
       }
     ]
+  },
+  "tool_shop": {
+    "name": "ToolShop (Safezone)",
+    "type": "safezone",
+    "postal_codes": [
+      "218",
+      "317"
+    ],
+    "points": [
+      {
+        "x": 2748.4,
+        "z": 3750.4,
+        "postal_code": "317",
+        "street": "ToolShop Bölgesi"
+      },
+      {
+        "x": 2746.2,
+        "z": 3713.5,
+        "postal_code": "317",
+        "street": "ToolShop Bölgesi"
+      },
+      {
+        "x": 2803.0,
+        "z": 3713.6,
+        "postal_code": "317",
+        "street": "ToolShop Bölgesi"
+      },
+      {
+        "x": 2802.9,
+        "z": 3750.8,
+        "postal_code": "317",
+        "street": "ToolShop Bölgesi"
+      }
+    ]
   }
 }

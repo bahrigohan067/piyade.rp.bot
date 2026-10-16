@@ -36,15 +36,22 @@ BOLGELER_FILE = os.path.join(DATA_DIR, "bolgeler.json")
 # EŞYA VE FİYAT TANIMLARI
 # =====================================================================
 MARKET_ESYALARI = {
-    "İlk Yardım Kiti": {"fiyat": 150, "aciklama": "Yaralanmaları tedavi etmek için acil tıbbi ekipman.", "emoji": "🩹"},
-    "Levye": {"fiyat": 200, "aciklama": "Ağır hizmet tipi çelik levye.", "emoji": "<:5885crowbar:1558470559132819566>"},
-    "Çekiç": {"fiyat": 100, "aciklama": "Tamirat ve marangozluk işleri için standart çekiç.", "emoji": "🔨"},
+    "Küçük Çadır": {"fiyat": 15, "aciklama": "1-2 kişilik pratik ve hafif kamp çadırı.", "emoji": "<:ae7d9ae9bf1d44f187144d80c79543f4:1560642000489943170>"},
+    "Büyük Çadır": {"fiyat": 20, "aciklama": "Geniş ve dayanıklı ekip kamp çadırı.", "emoji": "<:379ecf010f70471eb82d9cf4cb289927:1560641886656528424>"},
+    "Kamp Sandalyesi": {"fiyat": 10, "aciklama": "Katlanabilir ergonomik açık hava kamp sandalyesi.", "emoji": "<:f476dc1a592a4f7c8cd181958653c463:1560641947205509120>"},
+    "Oturulabilir Kütük": {"fiyat": 5, "aciklama": "Doğal ahşap oturak ve dinlenme kütüğü.", "emoji": "<:2511d7eda8d144018634de8fe91ca9c3:1560643137855291393>"},
+    "Plastik Sandalye": {"fiyat": 5, "aciklama": "Hafif ve taşınabilir beyaz plastik sandalye.", "emoji": "<:Gemini_Generated_Image_2kv55d2kv:1560643392415989873>"},
+    "Kamp Ateşi": {"fiyat": 5, "aciklama": "Isınma ve yemek pişirme için odunlu kamp ateşi kiti.", "emoji": "<a:711628minecraftcamperfire:1560643302024286269>"},
+    "Beyzboll Sopası": {"fiyat": 200, "aciklama": "Sağlam ahşap yakın dövüş ve spor ekipmanı.", "emoji": "<:bloodybaseballbat:1560643947687321630>"},
+    "İlk Yardım Kiti": {"fiyat": 200, "aciklama": "Yaralanmaları tedavi etmek için acil tıbbi ekipman.", "emoji": "<:5190medkit:1560644322800443432>"},
+    "Levye": {"fiyat": 300, "aciklama": "Ağır hizmet tipi çelik levye.", "emoji": "<:5885crowbar:1558470559132819566>"},
+    "Çekiç": {"fiyat": 150, "aciklama": "Tamirat ve marangozluk işleri için standart çekiç.", "emoji": "🔨"},
     "Kazma": {"fiyat": 250, "aciklama": "Kazı ve maden işlerinde kullanılan sağlam kazma.", "emoji": "⛏️"},
-    "Bıçak": {"fiyat": 350, "aciklama": "Keskin paslanmaz çelik av bıçağı.", "emoji": "🔪"},
+    "Bıçak": {"fiyat": 400, "aciklama": "Keskin paslanmaz çelik av bıçağı.", "emoji": "🔪"},
 }
 
 ILLEGAL_ESYALAR = {
-    "Cam kesici": {"fiyat": 500, "aciklama": "Sessizce cam vitrinleri ve pencereleri kesmek için özel elmas uç.", "emoji": "💎"},
+    "Cam kesici": {"fiyat": 2500, "aciklama": "Sessizce cam vitrinleri ve pencereleri kesmek için özel elmas uç.", "emoji": "💎"},
     "RFID Disruptor": {"fiyat": 1200, "aciklama": "Elektronik kilit sistemlerini ve sinyalleri bozan karıştırıcı cihaz.", "emoji": "📡"},
     "LockPick": {"fiyat": 400, "aciklama": "Mekanik kapı ve kelepçe kilitlerini açmaya yarayan maymuncuk seti.", "emoji": "🔓"},
     "Meth Malzemeleri": {"fiyat": 600, "aciklama": "Kimyasal laboratuvarda madde üretiminde kullanılan ham maddeler.", "emoji": "🧪"},
@@ -482,6 +489,115 @@ async def gunshop_engelleme_mesaji(interaction: discord.Interaction, durum: str,
         )
 
 # =====================================================================
+# İLLEGAL MARKET (KARA BORSA) KONUM VE DOĞRULAMA FONKSİYONLARI
+# =====================================================================
+ILLEGAL_MARKET_KONUM = {
+    "name": "Kara Borsa Zula Noktası",
+    "x": 2789.3,
+    "z": 3740.5,
+    "maksimum_mesafe": 6.0,
+    "postal": "317",
+    "street": "ToolShop Zula Bölgesi"
+}
+
+def kullanici_illegal_market_kontrol(bot: commands.Bot, member: discord.Member) -> tuple[bool, str, dict, float, dict | None]:
+    """
+    Kullanıcının ER:LC oyununda Kara Borsa zula noktasında (X: 2789.3 | Z: 3740.5) olup olmadığını denetler.
+    Dönüş: (uygun_mu, durum_kodu, illegal_market_info, mesafe, oyuncu_konumu)
+    """
+    market_info = dict(ILLEGAL_MARKET_KONUM)
+    disp_name = getattr(member, "display_name", "") or getattr(member, "name", "")
+    roblox_ad, roblox_id = discord_to_roblox(member.id, disp_name)
+
+    radar_cog = bot.get_cog("LiveRadar")
+    if not radar_cog:
+        return False, "radar_yok", market_info, 999999.0, None
+
+    aktif_oyuncular = getattr(radar_cog, "aktif_oyuncular", {}) or {}
+    oyuncu_konum = None
+
+    if roblox_ad:
+        if roblox_ad in aktif_oyuncular:
+            oyuncu_konum = aktif_oyuncular[roblox_ad]
+        else:
+            for p_name, p_loc in aktif_oyuncular.items():
+                if p_name.lower() == roblox_ad.lower():
+                    oyuncu_konum = p_loc
+                    break
+
+    if not oyuncu_konum and disp_name and "|" in disp_name:
+        for parca in disp_name.split("|"):
+            temiz = parca.strip()
+            if len(temiz) >= 3:
+                for p_name, p_loc in aktif_oyuncular.items():
+                    if p_name.lower() == temiz.lower():
+                        oyuncu_konum = p_loc
+                        roblox_ad = p_name
+                        break
+            if oyuncu_konum:
+                break
+
+    if not oyuncu_konum:
+        if not roblox_ad:
+            return False, "kayit_yok", market_info, 999999.0, None
+        return False, "oyunda_degil", market_info, 999999.0, None
+
+    px = oyuncu_konum.get("x")
+    pz = oyuncu_konum.get("z")
+    if not isinstance(px, (int, float)) or not isinstance(pz, (int, float)):
+        return False, "konum_gecersiz", market_info, 999999.0, oyuncu_konum
+
+    mesafe = mesafe_hesapla(px, pz, market_info["x"], market_info["z"])
+    max_tol = float(market_info.get("maksimum_mesafe", 6.0))
+
+    if mesafe <= max_tol:
+        return True, "basarili", market_info, mesafe, oyuncu_konum
+    else:
+        return False, "uzakta", market_info, mesafe, oyuncu_konum
+
+async def illegal_market_engelleme_mesaji(interaction: discord.Interaction, durum: str, market_info: dict, mesafe: float, p_loc: dict | None):
+    """Kara borsa panelinde konum doğrulaması başarısız olduğunda kullanıcıya hata bildirimi gönderir."""
+    if durum == "kayit_yok":
+        return await interaction.response.send_message(
+            "❌ **Kayıtlı Roblox Hesabı Bulunamadı!**\n"
+            "Kara Borsa (İllegal Market) panelini kullanabilmek için Discord hesabınızın onaylı bir Roblox hesabı ile eşleşmiş olması gerekir.\n"
+            "Lütfen önce sunucuda kayıt olunuz.",
+            ephemeral=True
+        )
+    elif durum == "oyunda_degil":
+        roblox_ad, _ = discord_to_roblox(interaction.user.id, interaction.user.display_name)
+        return await interaction.response.send_message(
+            f"❌ **ER:LC Sunucusunda Aktif Değilsiniz!**\n"
+            f"Kara Borsa panelini kullanabilmek için ER:LC oyununda aktif olmalı ve gizli zula noktasında bulunmalısınız.\n"
+            f"🎮 **Kayıtlı Roblox Hesabı:** `{roblox_ad or 'Bilinmiyor'}`",
+            ephemeral=True
+        )
+    elif durum == "uzakta" and p_loc:
+        px = p_loc.get("x", "-")
+        pz = p_loc.get("z", "-")
+        posta = p_loc.get("postal", "-")
+        sokak = p_loc.get("street", "-")
+        max_tol = int(market_info.get("maksimum_mesafe", 6.0))
+        return await interaction.response.send_message(
+            f"❌ **Kara Borsa Zula Noktasından Uzaksınız!**\n"
+            f"İllegal teçhizat ve malzeme alabilmek için **ER:LC oyununda gizli zula noktasına (ToolShop Arkası)** gitmelisiniz.\n\n"
+            f"📍 **Mevcut Konumunuz:** X: `{px}` | Z: `{pz}` (Posta: `{posta}` • {sokak})\n"
+            f"🌑 **Hedef Zula Noktası:** X: `{market_info['x']}` | Z: `{market_info['z']}`\n"
+            f"📏 **Zulaya Mesafe:** `{round(mesafe, 1)} metre` *(İzin verilen azami mesafe: {max_tol} metre)*",
+            ephemeral=True
+        )
+    elif durum == "radar_yok":
+        return await interaction.response.send_message(
+            "❌ Canlı radar sistemi aktif değil veya API bekleniyor. Lütfen birkaç saniye sonra tekrar deneyiniz.",
+            ephemeral=True
+        )
+    else:
+        return await interaction.response.send_message(
+            "❌ Konum doğrulaması yapılamadı veya oyun radar verisi henüz güncellenmedi. Lütfen birkaç saniye sonra tekrar deneyiniz.",
+            ephemeral=True
+        )
+
+# =====================================================================
 # ATM MODALLARI VE GÖRÜNÜMÜ
 # =====================================================================
 class ATMYatirModal(discord.ui.Modal, title="🏧 ATM • Para Yatırma"):
@@ -858,6 +974,11 @@ class TopluAlimModal(discord.ui.Modal):
         except ValueError:
             return await interaction.response.send_message("❌ Geçerli ve pozitif bir sayı girmelisiniz!", ephemeral=True)
 
+        if self.item_dict is ILLEGAL_ESYALAR:
+            uygun, durum, m_info, mesafe, p_loc = kullanici_illegal_market_kontrol(interaction.client, interaction.user)
+            if not uygun:
+                return await illegal_market_engelleme_mesaji(interaction, durum, m_info, mesafe, p_loc)
+
         item_info = self.item_dict[bulunan_esya]
         toplam_tutar = item_info["fiyat"] * adet_val
 
@@ -890,62 +1011,59 @@ class MarketView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="İlk Yardım Kiti ($150)", emoji="🩹", style=discord.ButtonStyle.success, custom_id="market_btn_ilkyardim", row=0)
+    # ── Satır 0 (Kamp & Oturma Ekipmanları) ──
+    @discord.ui.button(label="Küçük Çadır ($15)", emoji="<:ae7d9ae9bf1d44f187144d80c79543f4:1560642000489943170>", style=discord.ButtonStyle.primary, custom_id="market_btn_kucukcadir", row=0)
+    async def kucukcadir_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await market_tekli_alim(interaction, "Küçük Çadır", MARKET_ESYALARI, "✅ Alışveriş Tamamlandı", "Piyade RP 24/7 Market Sistemi", discord.Color.green())
+
+    @discord.ui.button(label="Büyük Çadır ($20)", emoji="<:379ecf010f70471eb82d9cf4cb289927:1560641886656528424>", style=discord.ButtonStyle.primary, custom_id="market_btn_buyukcadir", row=0)
+    async def buyukcadir_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await market_tekli_alim(interaction, "Büyük Çadır", MARKET_ESYALARI, "✅ Alışveriş Tamamlandı", "Piyade RP 24/7 Market Sistemi", discord.Color.green())
+
+    @discord.ui.button(label="Kamp Sandalyesi ($10)", emoji="<:f476dc1a592a4f7c8cd181958653c463:1560641947205509120>", style=discord.ButtonStyle.primary, custom_id="market_btn_kampsandalye", row=0)
+    async def kampsandalye_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await market_tekli_alim(interaction, "Kamp Sandalyesi", MARKET_ESYALARI, "✅ Alışveriş Tamamlandı", "Piyade RP 24/7 Market Sistemi", discord.Color.green())
+
+    @discord.ui.button(label="Oturulabilir Kütük ($5)", emoji="<:2511d7eda8d144018634de8fe91ca9c3:1560643137855291393>", style=discord.ButtonStyle.primary, custom_id="market_btn_kutuk", row=0)
+    async def kutuk_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await market_tekli_alim(interaction, "Oturulabilir Kütük", MARKET_ESYALARI, "✅ Alışveriş Tamamlandı", "Piyade RP 24/7 Market Sistemi", discord.Color.green())
+
+    # ── Satır 1 (Açık Hava, Sağlık & Spor) ──
+    @discord.ui.button(label="Plastik Sandalye ($5)", emoji="<:Gemini_Generated_Image_2kv55d2kv:1560643392415989873>", style=discord.ButtonStyle.secondary, custom_id="market_btn_plastiksandalye", row=1)
+    async def plastiksandalye_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await market_tekli_alim(interaction, "Plastik Sandalye", MARKET_ESYALARI, "✅ Alışveriş Tamamlandı", "Piyade RP 24/7 Market Sistemi", discord.Color.green())
+
+    @discord.ui.button(label="Kamp Ateşi ($5)", emoji="<a:711628minecraftcamperfire:1560643302024286269>", style=discord.ButtonStyle.secondary, custom_id="market_btn_kampatesi", row=1)
+    async def kampatesi_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await market_tekli_alim(interaction, "Kamp Ateşi", MARKET_ESYALARI, "✅ Alışveriş Tamamlandı", "Piyade RP 24/7 Market Sistemi", discord.Color.green())
+
+    @discord.ui.button(label="Beyzboll Sopası ($200)", emoji="<:bloodybaseballbat:1560643947687321630>", style=discord.ButtonStyle.secondary, custom_id="market_btn_beyzboll", row=1)
+    async def beyzboll_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await market_tekli_alim(interaction, "Beyzboll Sopası", MARKET_ESYALARI, "✅ Alışveriş Tamamlandı", "Piyade RP 24/7 Market Sistemi", discord.Color.green())
+
+    @discord.ui.button(label="İlk Yardım Kiti ($200)", emoji="<:5190medkit:1560644322800443432>", style=discord.ButtonStyle.success, custom_id="market_btn_ilkyardim", row=1)
     async def ilkyardim_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await market_tekli_alim(
-            interaction,
-            "İlk Yardım Kiti",
-            MARKET_ESYALARI,
-            "✅ Alışveriş Tamamlandı",
-            "Piyade RP 24/7 Market Sistemi",
-            discord.Color.green()
-        )
+        await market_tekli_alim(interaction, "İlk Yardım Kiti", MARKET_ESYALARI, "✅ Alışveriş Tamamlandı", "Piyade RP 24/7 Market Sistemi", discord.Color.green())
 
-    @discord.ui.button(label="Levye ($200)", emoji="<:5885crowbar:1558470559132819566>", style=discord.ButtonStyle.primary, custom_id="market_btn_levye", row=0)
+    # ── Satır 2 (El Aletleri & Savunma) ──
+    @discord.ui.button(label="Levye ($300)", emoji="<:5885crowbar:1558470559132819566>", style=discord.ButtonStyle.primary, custom_id="market_btn_levye", row=2)
     async def levye_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await market_tekli_alim(
-            interaction,
-            "Levye",
-            MARKET_ESYALARI,
-            "✅ Alışveriş Tamamlandı",
-            "Piyade RP 24/7 Market Sistemi",
-            discord.Color.green()
-        )
+        await market_tekli_alim(interaction, "Levye", MARKET_ESYALARI, "✅ Alışveriş Tamamlandı", "Piyade RP 24/7 Market Sistemi", discord.Color.green())
 
-    @discord.ui.button(label="Çekiç ($100)", emoji="🔨", style=discord.ButtonStyle.primary, custom_id="market_btn_cekic", row=0)
+    @discord.ui.button(label="Çekiç ($150)", emoji="🔨", style=discord.ButtonStyle.primary, custom_id="market_btn_cekic", row=2)
     async def cekic_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await market_tekli_alim(
-            interaction,
-            "Çekiç",
-            MARKET_ESYALARI,
-            "✅ Alışveriş Tamamlandı",
-            "Piyade RP 24/7 Market Sistemi",
-            discord.Color.green()
-        )
+        await market_tekli_alim(interaction, "Çekiç", MARKET_ESYALARI, "✅ Alışveriş Tamamlandı", "Piyade RP 24/7 Market Sistemi", discord.Color.green())
 
-    @discord.ui.button(label="Kazma ($250)", emoji="⛏️", style=discord.ButtonStyle.primary, custom_id="market_btn_kazma", row=1)
+    @discord.ui.button(label="Kazma ($250)", emoji="⛏️", style=discord.ButtonStyle.primary, custom_id="market_btn_kazma", row=2)
     async def kazma_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await market_tekli_alim(
-            interaction,
-            "Kazma",
-            MARKET_ESYALARI,
-            "✅ Alışveriş Tamamlandı",
-            "Piyade RP 24/7 Market Sistemi",
-            discord.Color.green()
-        )
+        await market_tekli_alim(interaction, "Kazma", MARKET_ESYALARI, "✅ Alışveriş Tamamlandı", "Piyade RP 24/7 Market Sistemi", discord.Color.green())
 
-    @discord.ui.button(label="Bıçak ($350)", emoji="🔪", style=discord.ButtonStyle.secondary, custom_id="market_btn_bicak", row=1)
+    @discord.ui.button(label="Bıçak ($400)", emoji="🔪", style=discord.ButtonStyle.danger, custom_id="market_btn_bicak", row=2)
     async def bicak_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await market_tekli_alim(
-            interaction,
-            "Bıçak",
-            MARKET_ESYALARI,
-            "✅ Alışveriş Tamamlandı",
-            "Piyade RP 24/7 Market Sistemi",
-            discord.Color.green()
-        )
+        await market_tekli_alim(interaction, "Bıçak", MARKET_ESYALARI, "✅ Alışveriş Tamamlandı", "Piyade RP 24/7 Market Sistemi", discord.Color.green())
 
-    @discord.ui.button(label="Toplu / Adetli Satın Al", emoji="🔢", style=discord.ButtonStyle.secondary, custom_id="market_btn_toplu", row=2)
+    # ── Satır 3 (Toplu Satın Alım) ──
+    @discord.ui.button(label="Toplu / Adetli Satın Al", emoji="🔢", style=discord.ButtonStyle.secondary, custom_id="market_btn_toplu", row=3)
     async def toplu_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         modal = TopluAlimModal(
             MARKET_ESYALARI,
@@ -963,8 +1081,11 @@ class IllegalMarketView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="Cam Kesici ($500)", emoji="💎", style=discord.ButtonStyle.danger, custom_id="ill_btn_camkesici", row=0)
+    @discord.ui.button(label="Cam Kesici ($2.500)", emoji="💎", style=discord.ButtonStyle.danger, custom_id="ill_btn_camkesici", row=0)
     async def camkesici_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        uygun, durum, m_info, mesafe, p_loc = kullanici_illegal_market_kontrol(interaction.client, interaction.user)
+        if not uygun:
+            return await illegal_market_engelleme_mesaji(interaction, durum, m_info, mesafe, p_loc)
         await market_tekli_alim(
             interaction,
             "Cam kesici",
@@ -976,6 +1097,9 @@ class IllegalMarketView(discord.ui.View):
 
     @discord.ui.button(label="RFID Disruptor ($1.200)", emoji="📡", style=discord.ButtonStyle.danger, custom_id="ill_btn_rfid", row=0)
     async def rfid_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        uygun, durum, m_info, mesafe, p_loc = kullanici_illegal_market_kontrol(interaction.client, interaction.user)
+        if not uygun:
+            return await illegal_market_engelleme_mesaji(interaction, durum, m_info, mesafe, p_loc)
         await market_tekli_alim(
             interaction,
             "RFID Disruptor",
@@ -985,8 +1109,11 @@ class IllegalMarketView(discord.ui.View):
             discord.Color.dark_grey()
         )
 
-    @discord.ui.button(label="LockPick ($400)", emoji="🔐", style=discord.ButtonStyle.danger, custom_id="ill_btn_lockpick", row=1)
+    @discord.ui.button(label="LockPick ($400)", emoji="🔓", style=discord.ButtonStyle.danger, custom_id="ill_btn_lockpick", row=1)
     async def lockpick_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        uygun, durum, m_info, mesafe, p_loc = kullanici_illegal_market_kontrol(interaction.client, interaction.user)
+        if not uygun:
+            return await illegal_market_engelleme_mesaji(interaction, durum, m_info, mesafe, p_loc)
         await market_tekli_alim(
             interaction,
             "LockPick",
@@ -998,6 +1125,9 @@ class IllegalMarketView(discord.ui.View):
 
     @discord.ui.button(label="Meth Malzemeleri ($600)", emoji="🧪", style=discord.ButtonStyle.danger, custom_id="ill_btn_meth", row=1)
     async def meth_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        uygun, durum, m_info, mesafe, p_loc = kullanici_illegal_market_kontrol(interaction.client, interaction.user)
+        if not uygun:
+            return await illegal_market_engelleme_mesaji(interaction, durum, m_info, mesafe, p_loc)
         await market_tekli_alim(
             interaction,
             "Meth Malzemeleri",
@@ -1009,6 +1139,9 @@ class IllegalMarketView(discord.ui.View):
 
     @discord.ui.button(label="Toplu / Adetli Satın Al", emoji="🔢", style=discord.ButtonStyle.secondary, custom_id="ill_btn_toplu", row=2)
     async def toplu_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        uygun, durum, m_info, mesafe, p_loc = kullanici_illegal_market_kontrol(interaction.client, interaction.user)
+        if not uygun:
+            return await illegal_market_engelleme_mesaji(interaction, durum, m_info, mesafe, p_loc)
         modal = TopluAlimModal(
             ILLEGAL_ESYALAR,
             "🌑 Toplu İllegal Alışveriş Tamamlandı",
@@ -2124,6 +2257,7 @@ class EnvanterSistemi(commands.Cog):
                 description=(
                     "Yeraltı dünyasının teçhizat ve kimyasal madde tedarik noktası.\n"
                     "İhtiyacınız olan illegal malzemeleri aşağıdaki butonlara basarak temin edebilirsiniz.\n\n"
+                    "⚠️ **LOKASYON ŞARTI:** Bu paneli kullanabilmek için **ER:LC oyununda Kara Borsa zula noktasında (ToolShop Arkası • X: 2789.3 | Z: 3740.5 - Azami 6 metre)** bulunmalısınız!\n"
                     "💵 **Ödeme:** Sadece elden **NAKİT** para kabul edilir.\n"
                     "──────────────────────────────────────────"
                 ),
@@ -2547,6 +2681,51 @@ class EsyaGonderView(discord.ui.View):
         embed.add_field(name="🛣️ Mağaza Adresi", value=f"`{street_str} • Posta {p_str}`", inline=False)
         embed.add_field(name="📊 Panel Erişim Durumu", value=durum_metin, inline=False)
         embed.set_footer(text="Piyade RP • Canlı GPS & Silahçı Doğrulama Ağı")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @app_commands.command(name="illegal-mesafe", description="ER:LC oyununda Kara Borsa zula noktasına olan mesafenizi gösterir.")
+    @app_commands.describe(kullanici="Mesafe kontrolü yapılacak üye (Varsayılan: siz)")
+    async def cmd_illegal_mesafe(self, interaction: discord.Interaction, kullanici: discord.Member = None):
+        hedef = kullanici or interaction.user
+        uygun, durum, m_info, mesafe, p_loc = kullanici_illegal_market_kontrol(self.bot, hedef)
+        
+        if durum == "kayit_yok":
+            return await interaction.response.send_message(
+                f"❌ {hedef.mention} için onaylı bir Roblox hesabı bulunamadı. Lütfen önce sunucuda kayıt olunuz.",
+                ephemeral=True
+            )
+        if durum == "oyunda_degil":
+            roblox_ad, _ = discord_to_roblox(hedef.id, hedef.display_name)
+            return await interaction.response.send_message(
+                f"❌ {hedef.mention} şu anda ER:LC sunucusunda aktif değil! (Roblox: `{roblox_ad or 'Bilinmiyor'}`)",
+                ephemeral=True
+            )
+        if not p_loc:
+            return await interaction.response.send_message(
+                "❌ Konum doğrulaması yapılamadı veya oyun radar verisi henüz güncellenmedi.",
+                ephemeral=True
+            )
+
+        px = p_loc.get("x", "-")
+        pz = p_loc.get("z", "-")
+        posta = p_loc.get("postal", "-")
+        sokak = p_loc.get("street", "-")
+        max_tol = int(m_info.get("maksimum_mesafe", 6.0))
+        
+        durum_metin = "🟢 **Kara Borsa Zula Noktasındasınız! (Panel Kullanılabilir)**" if uygun else "🔴 **Zula Noktasından Uzaksınız!**"
+        
+        embed = discord.Embed(
+            title=f"🌑 CANLI KARA BORSA ZULA MESAFE ANALİZİ • {hedef.display_name}",
+            color=discord.Color.green() if uygun else discord.Color.dark_red(),
+            timestamp=datetime.now(timezone.utc)
+        )
+        embed.set_thumbnail(url=hedef.display_avatar.url)
+        embed.add_field(name="📍 Oyun İçi Konumunuz", value=f"X: `{px}` | Z: `{pz}`\nPosta: `{posta}` ({sokak})", inline=True)
+        embed.add_field(name="🌑 Hedef Zula Noktası", value=f"**{m_info['name']}**\nX: `{m_info['x']}` | Z: `{m_info['z']}`", inline=True)
+        embed.add_field(name="📏 Mesafe", value=f"**{round(mesafe, 1)} metre**\n*(İzin Verilen Azami Tolerans: {max_tol} metre)*", inline=True)
+        embed.add_field(name="🛣️ Zula Konumu", value=f"`{m_info.get('street', 'ToolShop Bölgesi')} • Posta {m_info.get('postal', '317')}`", inline=False)
+        embed.add_field(name="📊 Panel Erişim Durumu", value=durum_metin, inline=False)
+        embed.set_footer(text="Piyade RP • Canlı GPS & Kara Borsa Doğrulama Ağı")
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
