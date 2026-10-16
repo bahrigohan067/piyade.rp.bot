@@ -3,6 +3,7 @@ from discord.ext import commands, tasks
 from discord import app_commands
 import os
 import json
+import asyncio
 import aiohttp
 from datetime import datetime, timezone, timedelta
 from typing import Optional
@@ -74,13 +75,16 @@ async def send_erlc_command(command_text: str) -> dict:
         print(f"[RP OYLAMA UYARI] {msg}", flush=True)
         return {"success": False, "message": msg, "status": None}
 
+    # Roblox chat/komut motoru Türkçe karakterleri bozmasın diye temizle
+    clean_command = clean_ascii_for_roblox(command_text)
+
     headers = {
         "Server-Key": api_key,
         "Content-Type": "application/json"
     }
 
     url = "https://api.erlc.gg/v2/server/command"
-    payload = {"command": command_text}
+    payload = {"command": clean_command}
 
     try:
         timeout = aiohttp.ClientTimeout(total=8)
@@ -96,22 +100,30 @@ async def send_erlc_command(command_text: str) -> dict:
                         status = resp_v1.status
                         resp_text = await resp_v1.text()
 
+                # Eğer 429 (Rate Limit - 5 saniyede 1 komut) gelirse, 3 saniye bekleyip 1 kez otomatik tekrar dene
+                if status == 429:
+                    print(f"[RP OYLAMA UYARI] ER:LC API hız sınırına (429) takıldı. 3 saniye beklenip tekrar deneniyor: '{clean_command}'", flush=True)
+                    await asyncio.sleep(3)
+                    async with session.post(url, headers=headers, json=payload) as retry_resp:
+                        status = retry_resp.status
+                        resp_text = await retry_resp.text()
+
                 if status in (200, 204):
-                    print(f"[RP OYLAMA BAŞARILI] Roblox ER:LC anonsu iletildi: '{command_text}' (HTTP {status})", flush=True)
+                    print(f"[RP OYLAMA BAŞARILI] Roblox ER:LC komutu iletildi: '{clean_command}' (HTTP {status})", flush=True)
                     return {
                         "success": True,
-                        "command": command_text,
+                        "command": clean_command,
                         "status": status,
-                        "message": f"Komut başarıyla oyuna iletildi (`{command_text}`)."
+                        "message": f"Komut başarıyla oyuna iletildi (`{clean_command}`)."
                     }
                 elif status == 422:
                     msg = "Oyunda hiç oyuncu bulunmadığı için ER:LC komut çalıştıramadı (Sunucu boş veya kapalı)."
                     print(f"[RP OYLAMA BİLGİ] {msg} ({resp_text})", flush=True)
-                    return {"success": False, "command": command_text, "status": 422, "message": msg}
+                    return {"success": False, "command": clean_command, "status": 422, "message": msg}
                 elif status == 429:
                     msg = "ER:LC API hız sınırına (Rate Limit: 5 saniyede 1 komut) takıldı. Lütfen biraz bekleyin."
                     print(f"[RP OYLAMA UYARI] {msg} ({resp_text})", flush=True)
-                    return {"success": False, "command": command_text, "status": 429, "message": msg}
+                    return {"success": False, "command": clean_command, "status": 429, "message": msg}
                 elif status == 403:
                     msg = "ER:LC API anahtarı yetkisiz veya sunucu komut izni kapalı (HTTP 403)."
                     print(f"[RP OYLAMA HATA] {msg} ({resp_text})", flush=True)
@@ -477,11 +489,19 @@ class RPOylama(commands.Cog):
         self.rp_aktif = True
         self.kaydet_durum()
 
-        # 1. Roblox ER:LC sunucusuna anons komutunu ilet (:m)
+        # 1. Oyun sunucusunda bulunan herkesi doğma noktasına topla (:respawn)
+        print("[RP OYLAMA] Rol başladı: Oyuncuları doğma noktasına toplamak için :respawn gönderiliyor...", flush=True)
+        respawn_sonuc = await send_erlc_command(":respawn")
+
+        # 2. Herkes spawnda toplandıktan 3 saniye sonra ekran anonsu gönder
+        await asyncio.sleep(3)
+
+        # 3. Roblox ER:LC sunucusuna anons komutunu ilet (:m)
         erlc_komut = ":m RP Başlamıştır , herkese iyi roller."
         anons_sonuc = await send_erlc_announcement(erlc_komut)
+        anons_sonuc["respawn_sonuc"] = respawn_sonuc
 
-        # 2. Panel kanalındaki embed'i Yeşile çevir ve butonu kaldır
+        # 4. Panel kanalındaki embed'i Yeşile çevir ve butonu kaldır
         channel = self.bot.get_channel(PANEL_KANAL_ID)
         if channel:
             msg = None
@@ -647,7 +667,8 @@ class RPOylama(commands.Cog):
         anons_sonuc = await self.rolu_baslat(tetikleyen=interaction.user)
 
         if anons_sonuc and anons_sonuc.get("success"):
-            anons_bilgi = f"✅ `{anons_sonuc.get('command')}` oyuna iletildi (HTTP {anons_sonuc.get('status')})"
+            respawn_bilgi = "✅ `:respawn` iletildi" if anons_sonuc.get("respawn_sonuc", {}).get("success") else f"⚠️ `:respawn`: {anons_sonuc.get('respawn_sonuc', {}).get('message', 'iletilemedi')}"
+            anons_bilgi = f"{respawn_bilgi}\n✅ `{anons_sonuc.get('command')}` oyuna iletildi (HTTP {anons_sonuc.get('status')})"
         else:
             hata_mesaji = anons_sonuc.get("message") if anons_sonuc else "Bilinmeyen hata"
             anons_bilgi = f"⚠️ {hata_mesaji}"
@@ -655,7 +676,7 @@ class RPOylama(commands.Cog):
         await interaction.followup.send(
             f"🟢 **Rol başarıyla manuel olarak başlatıldı!**\n"
             f"📢 **Duyuru:** <#{DUYURU_KANAL_ID}> kanalına bildirim geçildi.\n"
-            f"🎮 **ER:LC Oyun Anonsu:** {anons_bilgi}",
+            f"🎮 **ER:LC Komutları:**\n{anons_bilgi}",
             ephemeral=True
         )
 
