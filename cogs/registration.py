@@ -1123,7 +1123,13 @@ class KayitRedModal(discord.ui.Modal, title="❌ Başvuru Reddetme"):
                 kayit["basvuru_karar"] = {"sonuc": "red", "yetkili_id": interaction.user.id, "tarih": _simdi(), "sebep": sebep}
                 _roblox_baglantisini_birak(kayit)
                 if kayit.get("thread_id"):
-                    th = guild.get_thread(int(kayit["thread_id"]))
+                    tid = int(kayit["thread_id"])
+                    th = guild.get_thread(tid)
+                    if th is None:
+                        try:
+                            th = await guild.fetch_channel(tid)
+                        except Exception:
+                            th = None
                     if th and uye:
                         try:
                             await th.send(
@@ -1139,8 +1145,10 @@ class KayitRedModal(discord.ui.Modal, title="❌ Başvuru Reddetme"):
                                     colour=discord.Colour.red(),
                                 ),
                             )
-                        except Exception:
-                            pass
+                            # Özel alt başlığı kapat ve kilitle
+                            await th.edit(archived=True, locked=True, reason="Başvuru reddedildi, özel alt başlık kapatıldı.")
+                        except Exception as e:
+                            print(f"[KAYIT] Alt başlık kapatılamadı: {e}", flush=True)
                     _thread_silme_planla(kayit)
                 await _kaydet()
             else:
@@ -1555,7 +1563,13 @@ async def karakter_onayla(interaction: discord.Interaction, uid: int):
         kayit["final"] = {"yetkili_id": interaction.user.id, "tarih": _simdi(), "nick": nick, "roller": rol_adlari}
 
         if kayit.get("thread_id"):
-            th = guild.get_thread(int(kayit["thread_id"]))
+            tid = int(kayit["thread_id"])
+            th = guild.get_thread(tid)
+            if th is None:
+                try:
+                    th = await guild.fetch_channel(tid)
+                except Exception:
+                    th = None
             if th:
                 try:
                     await th.send(
@@ -1575,8 +1589,10 @@ async def karakter_onayla(interaction: discord.Interaction, uid: int):
                         ),
                         allowed_mentions=discord.AllowedMentions(users=True, roles=False),
                     )
-                except Exception:
-                    pass
+                    # Kayıt tamamlandıktan sonra özel alt başlığı kapat ve kilitle
+                    await th.edit(archived=True, locked=True, reason="Kayıt tamamlandı, özel alt başlık kapatıldı.")
+                except Exception as e:
+                    print(f"[KAYIT] Alt başlık kapatılamadı: {e}", flush=True)
             _thread_silme_planla(kayit)
         await _kaydet()
 
