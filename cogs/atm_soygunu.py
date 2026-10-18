@@ -1,5 +1,5 @@
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 from discord import app_commands
 import os
 import json
@@ -7,6 +7,8 @@ import time
 import random
 import string
 import asyncio
+import aiohttp
+import re
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 
@@ -16,7 +18,9 @@ from cogs.envanter_sistemi import (
     update_user_profile,
     kullanici_atm_kontrol,
     format_usd,
-    ekonomi_log_gonder
+    ekonomi_log_gonder,
+    en_yakin_atm,
+    get_atm_max_mesafe
 )
 from cogs.live_radar import roblox_to_discord
 from cogs.rp_oylama import send_erlc_command
@@ -280,53 +284,182 @@ class ATMSoygunu(commands.Cog):
         self.cooldowns: dict = self.data.get("cooldowns", {})
         self.islenen_komutlar: set = set()
         self.aktif_soygunlar: set = set()
+        self._session: Optional[aiohttp.ClientSession] = None
+        self.bot_baslangic_zamani = time.time()
+        self.arkaplan_komut_loop.start()
+
+    def cog_unload(self):
+        self.arkaplan_komut_loop.cancel()
+        if self._session and not self._session.closed:
+            asyncio.create_task(self._session.close())
+
+    async def get_session(self) -> aiohttp.ClientSession:
+        if self._session is None or self._session.closed:
+            self._session = aiohttp.ClientSession()
+        return self._session
 
     def save_data(self):
         self.data["cooldowns"] = self.cooldowns
         kaydet_soygun_data(self.data)
 
-    # ── ER:LC KOMUT LOGU DİNLEYİCİSİ (arkaplan_konum_loop tarafından tetiklenir) ──
+    # ── ER:LC KOMUT LOGU DÖNGÜSÜ (Periyodik API Polling) ──
+    @tasks.loop(seconds=3)
+    async def arkaplan_komut_loop(self):
+        """
+        ER:LC API'sinden komut kayıtlarını (commandlogs) düzenli olarak çeker.
+        Oyuncuların oyun içi sohbete yazdığı ;atmsoy komutunu algılar.
+        """
+        if not self.bot.is_ready():
+            return
+
+        api_key = os.getenv("ERLC_API_KEY", "").strip("'\" \r\n\t")
+        if not api_key:
+            return
+
+        session = await self.get_session()
+        headers = {'Server-Key': api_key}
+        urls = [
+            'https://api.erlc.gg/v2/server/commandlogs',
+            'https://api.erlc.gg/v1/server/commandlogs'
+        ]
+
+        command_logs = None
+        for url in urls:
+            try:
+                async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=4)) as resp:
+                    if resp.status == 200:
+                        try:
+                            data = await resp.json()
+                            if isinstance(data, list):
+                                command_logs = data
+                                break
+                        except Exception:
+                            continue
+                    elif resp.status == 429:
+                        return
+            except Exception:
+                continue
+
+        if not command_logs or not isinstance(command_logs, list):
+            return
+
+        for log in command_logs:
+            cmd = str(log.get("Command") or log.get("command") or "").strip().lower()
+            if any(t in cmd for t in [";atmsoy", ";atm-soy", ";atm soy", ":atmsoy", ":atm-soy"]):
+                await self.handle_atmsoy_command(log)
+
+    @arkaplan_komut_loop.before_loop
+    async def before_arkaplan_komut_loop(self):
+        await self.bot.wait_until_ready()
+
+    # ── ER:LC KOMUT LOGU DİNLEYİCİSİ (Dış event çağrıları için) ──
     @commands.Cog.listener("on_erlc_command_logs")
     async def on_erlc_command_logs(self, command_logs: list):
         if not command_logs:
             return
 
         for log in command_logs:
-            cmd = str(log.get("Command", "")).strip().lower()
-            if cmd in [";atmsoy", ";atm-soy", ";atm soy", ":atmsoy", ":atm-soy"]:
+            cmd = str(log.get("Command") or log.get("command") or "").strip().lower()
+            if any(t in cmd for t in [";atmsoy", ";atm-soy", ";atm soy", ":atmsoy", ":atm-soy"]):
                 await self.handle_atmsoy_command(log)
 
-    # ── FALLBACK: WEBHOOK KANALI DİNLEYİCİSİ ──
+    # ── FALLBACK & ANLIK: WEBHOOK KANALI DİNLEYİCİSİ ──
     @commands.Cog.listener("on_message")
     async def on_message(self, message: discord.Message):
-        if message.author.bot or message.webhook_id:
-            content = (message.content or "").lower()
-            embed_texts = ""
-            for e in message.embeds:
-                parts = [e.title or "", e.description or ""]
-                for f in e.fields:
-                    parts.append(f"{f.name} {f.value}")
-                embed_texts += " " + " ".join(parts)
-            full_text = f"{content} {embed_texts.lower()}"
+        if not (message.author.bot or message.webhook_id):
+            return
 
-            if ";atmsoy" in full_text or ";atm-soy" in full_text:
-                # Webhook üzerinden tetiklenme kontrolü
-                pass
+        # 1. Embed'leri kontrol et (ER:LC Command Webhook genellikle Embed gönderir)
+        for embed in message.embeds:
+            cmd_val = ""
+            player_val = ""
+            user_id_val = ""
+
+            for field in embed.fields:
+                fn = (field.name or "").strip().lower()
+                fv = (field.value or "").strip()
+                if any(k in fn for k in ["command", "komut"]):
+                    cmd_val = fv
+                elif any(k in fn for k in ["player", "oyuncu", "executor", "yetkili", "kullanıcı"]):
+                    player_val = fv
+                elif any(k in fn for k in ["user id", "userid", "roblox id", "roblox_id"]):
+                    user_id_val = fv
+
+            combined_text = f"{message.content or ''} {embed.title or ''} {embed.description or ''} {cmd_val}".lower()
+            if any(trig in combined_text for trig in [";atmsoy", ";atm-soy", ";atm soy", ":atmsoy", ":atm-soy"]):
+                if not player_val:
+                    desc = embed.description or message.content or ""
+                    m_p = re.search(r"(?:Player|Oyuncu|Executor)[:\s*]+([A-Za-z0-9_]+)", desc, re.IGNORECASE)
+                    if m_p:
+                        player_val = m_p.group(1)
+
+                if player_val:
+                    if "[" in player_val and "]" in player_val:
+                        player_val = player_val.split("[")[1].split("]")[0]
+                    if "(" in player_val:
+                        player_val = player_val.split("(")[0].strip()
+                    if ":" in player_val and not user_id_val:
+                        parts = player_val.split(":", 1)
+                        player_val = parts[0].strip()
+                        user_id_val = parts[1].strip()
+
+                    log_payload = {
+                        "Player": f"{player_val}:{user_id_val}" if user_id_val else player_val,
+                        "Command": ";atmsoy",
+                        "Timestamp": int(time.time())
+                    }
+                    print(f"[ATM SOYGUN WEBHOOK] Webhook'tan ;atmsoy yakalandı! Oyuncu: {player_val}", flush=True)
+                    await self.handle_atmsoy_command(log_payload)
+                    return
+
+        # 2. Embedsiz düz metin kontrolü
+        content_lower = (message.content or "").lower()
+        if any(trig in content_lower for trig in [";atmsoy", ";atm-soy", ";atm soy", ":atmsoy", ":atm-soy"]):
+            m_p = re.search(r"(?:player|oyuncu|kullanıcı)[:\s*]+([A-Za-z0-9_]+)", message.content, re.IGNORECASE)
+            if m_p:
+                p_name = m_p.group(1)
+                log_payload = {
+                    "Player": p_name,
+                    "Command": ";atmsoy",
+                    "Timestamp": int(time.time())
+                }
+                print(f"[ATM SOYGUN DÜZ METİN] Webhook metninden ;atmsoy yakalandı! Oyuncu: {p_name}", flush=True)
+                await self.handle_atmsoy_command(log_payload)
 
     async def handle_atmsoy_command(self, log: dict):
-        player_raw = str(log.get("Player", "")).strip()
-        timestamp = log.get("Timestamp", 0)
-        command_str = str(log.get("Command", "")).strip()
+        player_raw = str(log.get("Player") or log.get("player") or log.get("executor") or log.get("Executor") or "").strip()
+        timestamp = log.get("Timestamp") or log.get("timestamp") or 0
+        command_str = str(log.get("Command") or log.get("command") or "").strip()
+
+        # Eski komutları filtrele (Bot başlangıcından önceki veya 90 saniyeden eski loglar)
+        try:
+            ts_float = float(timestamp)
+            if ts_float > 1000000000:
+                if time.time() - ts_float > 90:
+                    return
+                if ts_float < (self.bot_baslangic_zamani - 10):
+                    return
+        except (ValueError, TypeError):
+            pass
 
         log_key = f"{player_raw}_{command_str}_{timestamp}"
         if log_key in self.islenen_komutlar:
             return
         self.islenen_komutlar.add(log_key)
-        if len(self.islenen_komutlar) > 1000:
+        if len(self.islenen_komutlar) > 2000:
             self.islenen_komutlar.clear()
 
-        roblox_name = player_raw.split(":")[0].strip()
-        roblox_id = player_raw.split(":")[1].strip() if ":" in player_raw else ""
+        roblox_name = player_raw
+        roblox_id = ""
+
+        if "[" in roblox_name and "]" in roblox_name:
+            roblox_name = roblox_name.split("[")[1].split("]")[0]
+        if "(" in roblox_name:
+            roblox_name = roblox_name.split("(")[0].strip()
+        if ":" in roblox_name:
+            parts = roblox_name.split(":", 1)
+            roblox_name = parts[0].strip()
+            roblox_id = parts[1].strip()
 
         guild = self.bot.get_guild(GUILD_ID)
         if not guild:
@@ -342,17 +475,36 @@ class ATMSoygunu(commands.Cog):
                 except Exception:
                     member = None
 
-        if not member:
+        if not member and roblox_name:
+            r_lower = roblox_name.lower()
             for m in guild.members:
-                if roblox_name.lower() in m.display_name.lower():
+                if (r_lower == m.display_name.lower() or 
+                    r_lower in m.display_name.lower() or 
+                    r_lower == m.name.lower() or 
+                    r_lower in m.name.lower() or 
+                    (m.nick and r_lower in m.nick.lower())):
                     member = m
                     break
 
+            if not member:
+                try:
+                    queried = await guild.query_members(query=roblox_name, limit=5)
+                    for qm in queried:
+                        if (r_lower == qm.display_name.lower() or 
+                            r_lower in qm.display_name.lower() or 
+                            r_lower == qm.name.lower() or 
+                            r_lower in qm.name.lower()):
+                            member = qm
+                            break
+                except Exception as e:
+                    print(f"[ATM SOYGUN] query_members hatası: {e}", flush=True)
+
         if not member:
-            print(f"[ATM SOYGUN] {roblox_name} için Discord eşleşmesi bulunamadı.", flush=True)
+            print(f"[ATM SOYGUN] '{roblox_name}' için Discord eşleşmesi bulunamadı.", flush=True)
             await send_erlc_command(f":pm {roblox_name} Discord hesabinizi Piyade RP ile eslestirmelisiniz!")
             return
 
+        print(f"[ATM SOYGUN] {roblox_name} (Discord: {member.display_name} - {member.id}) için soygun tetiklendi.", flush=True)
         await self.execute_atmsoy_flow(member, roblox_name)
 
     async def execute_atmsoy_flow(self, member: discord.Member, roblox_name: str, interaction: Optional[discord.Interaction] = None):
@@ -370,6 +522,29 @@ class ATMSoygunu(commands.Cog):
 
         # 2. Canlı Radar ve ATM Yakınlık Kontrolü (Azami 6 metre)
         uygun, durum, en_yakin_atm, mesafe, p_loc = kullanici_atm_kontrol(self.bot, member)
+
+        # Eğer kullanici_atm_kontrol Discord adından roblox konumunu bulamazsa doğrudan roblox_name ile kontrol et
+        if (not uygun or not en_yakin_atm) and roblox_name:
+            radar_cog = self.bot.get_cog("LiveRadar")
+            if radar_cog:
+                aktif_oyuncular = getattr(radar_cog, "aktif_oyuncular", {}) or {}
+                p_loc_direct = None
+                for p_name, loc in aktif_oyuncular.items():
+                    if p_name.lower() == roblox_name.lower():
+                        p_loc_direct = loc
+                        break
+                if p_loc_direct:
+                    px = p_loc_direct.get("x")
+                    pz = p_loc_direct.get("z")
+                    if isinstance(px, (int, float)) and isinstance(pz, (int, float)):
+                        max_mesafe = get_atm_max_mesafe()
+                        en_yakin, d = en_yakin_atm(px, pz)
+                        if en_yakin:
+                            en_yakin_atm = en_yakin
+                            mesafe = d
+                            p_loc = p_loc_direct
+                            if d <= max_mesafe:
+                                uygun = True
         if not uygun or not en_yakin_atm:
             en_yakin_isim = en_yakin_atm['name'] if en_yakin_atm else "Bilinmiyor"
             mesafe_str = f"{round(mesafe, 1)} metre" if mesafe is not None else "Bilinmiyor"
@@ -786,6 +961,45 @@ class ATMSoygunu(commands.Cog):
     @app_commands.command(name="atmsoy", description="En yakınınızdaki ATM'yi soymak için kilit kırma arayüzünü açar.")
     async def cmd_atmsoy(self, interaction: discord.Interaction):
         await self.execute_atmsoy_flow(interaction.user, interaction.user.display_name, interaction=interaction)
+
+    # ── TEŞHİS & TEST KOMUTU (ER:LC API Bağlantı Durumu) ──
+    @app_commands.command(name="atm-komut-test", description="ER:LC CommandLogs API ve komut algılama durumunu test eder.")
+    @app_commands.default_permissions(administrator=True)
+    async def cmd_atm_komut_test(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        api_key = os.getenv("ERLC_API_KEY", "").strip("'\" \r\n\t")
+        if not api_key:
+            return await interaction.followup.send("❌ `ERLC_API_KEY` ortam değişkeni sunucuda ayarlanmamış!", ephemeral=True)
+
+        session = await self.get_session()
+        headers = {'Server-Key': api_key}
+
+        results = []
+        for url in ["https://api.erlc.gg/v2/server/commandlogs", "https://api.erlc.gg/v1/server/commandlogs"]:
+            try:
+                async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                    status = resp.status
+                    text = await resp.text()
+                    results.append(f"**URL:** `{url}`\n**HTTP Kod:** `{status}`\n**Cevap (İlk 300 Karakter):**\n```{text[:300]}```")
+            except Exception as e:
+                results.append(f"**URL:** `{url}`\n**Hata:** `{e}`")
+
+        embed = discord.Embed(
+            title="🔍 ER:LC Command Logs API Test Raporu",
+            color=discord.Color.blue(),
+            timestamp=datetime.now(tz_tr)
+        )
+        embed.description = "\n\n────────────────\n\n".join(results)
+        embed.add_field(
+            name="💡 Önemli Bilgi",
+            value=(
+                "Eğer ER:LC API komut loglarını vermiyorsa (403/404), Roblox ER:LC oyun içi sunucu ayarlarından "
+                "**'Komut Kayıtları Webhooku'** alanına bu sunucuda oluşturacağınız bir Discord Webhook bağlantısını yapıştırmanız yeterlidir!\n"
+                "Bot webhook üzerinden gelen `;atmsoy` komutlarını anlık (0 gecikmeyle) otomatik olarak yakalar."
+            ),
+            inline=False
+        )
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
 
 async def setup(bot: commands.Bot):

@@ -321,7 +321,7 @@ class LiveRadar(commands.Cog):
         try:
             session = await self.get_session()
             headers = {'Server-Key': api_key}
-            async with session.get('https://api.erlc.gg/v2/server?Players=true&KillLogs=true&CommandLogs=true', headers=headers, timeout=5) as resp:
+            async with session.get('https://api.erlc.gg/v2/server?Players=true&KillLogs=true', headers=headers, timeout=5) as resp:
                 if resp.status == 429:
                     retry_after = resp.headers.get("Retry-After", "5")
                     try:
@@ -337,10 +337,7 @@ class LiveRadar(commands.Cog):
                 data = await resp.json()
                 players = data.get("Players", [])
                 kill_logs = data.get("KillLogs", [])
-                command_logs = data.get("CommandLogs", [])
                 self.current_players_count = data.get("CurrentPlayers", len(players))
-                if command_logs:
-                    self.bot.dispatch("erlc_command_logs", command_logs)
         except Exception:
             return
 
