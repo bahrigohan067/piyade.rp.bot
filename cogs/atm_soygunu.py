@@ -786,8 +786,6 @@ class ATMSoygunu(commands.Cog):
             en_yakin_isim = hedef_atm['name'] if hedef_atm else "Bilinmiyor"
             mesafe_str = f"{round(mesafe, 1)} metre" if mesafe is not None else "Bilinmiyor"
 
-            await send_erlc_command(f":pm {roblox_name} Bir ATM cihazinin yaninda degilsiniz!")
-
             dm_text = (
                 f"❌ **Bir ATM Cihazının Yanında Değilsiniz!**\n"
                 f"ATM soymak için ER:LC oyununda bir ATM cihazının hemen yanında (azami 6 metre) durmalısınız.\n\n"
@@ -795,12 +793,13 @@ class ATMSoygunu(commands.Cog):
                 f"📏 **Mevcut Mesafeniz:** `{mesafe_str}` *(İzin verilen: 6 metre)*"
             )
             if interaction:
-                return await interaction.response.send_message(dm_text, ephemeral=True)
+                await interaction.response.send_message(dm_text, ephemeral=True)
             else:
                 try:
                     await member.send(dm_text)
                 except Exception:
                     pass
+                asyncio.create_task(send_erlc_command(f":pm {roblox_name} Bir ATM cihazinin yaninda degilsiniz!"))
             return
 
         # 3. 10 Dakika Bekleme Süresi (Cooldown) Kontrolü
@@ -811,20 +810,19 @@ class ATMSoygunu(commands.Cog):
             dakika = kalan // 60
             saniye = kalan % 60
 
-            await send_erlc_command(f":pm {roblox_name} Tekrar ATM soymak icin {dakika} dk {saniye} sn beklemelisiniz!")
-
             dm_text = (
                 f"⏳ **ATM Soygunu Bekleme Süresi Aktif!**\n"
                 f"Son yaptığınız ATM soygununun üzerinden henüz 10 dakika geçmedi.\n\n"
                 f"⏱️ **Kalan Süre:** `{dakika} dakika {saniye} saniye` sonra tekrar soyabilirsiniz."
             )
             if interaction:
-                return await interaction.response.send_message(dm_text, ephemeral=True)
+                await interaction.response.send_message(dm_text, ephemeral=True)
             else:
                 try:
                     await member.send(dm_text)
                 except Exception:
                     pass
+                asyncio.create_task(send_erlc_command(f":pm {roblox_name} Tekrar ATM soymak icin {dakika} dk {saniye} sn beklemelisiniz!"))
             return
 
         # 4. RFID Disruptor Eşya Kontrolü
@@ -832,21 +830,19 @@ class ATMSoygunu(commands.Cog):
         inv = profile.get("inventory", {})
         has_rfid = any(item.strip().lower() == GEREKLI_ESYA.lower() and count > 0 for item, count in inv.items())
         if not has_rfid:
-            # Oyun içine sadece kişiye özel mesaj gönder (:pm)
-            await send_erlc_command(f":pm {roblox_name} RFID Disruptor olmadan ATM soyamazsin!")
-
             dm_text = (
                 f"❌ **Gerekli Ekipman Eksik: {GEREKLI_ESYA}**\n"
                 f"ATM'nin elektronik kilit sistemini ve banka alarm sinyalini kesmek için envanterinizde **`{GEREKLI_ESYA}`** bulunmalıdır.\n\n"
                 f"İllegal pazardan bir RFID Disruptor temin ettikten sonra tekrar deneyiniz."
             )
             if interaction:
-                return await interaction.response.send_message(dm_text, ephemeral=True)
+                await interaction.response.send_message(dm_text, ephemeral=True)
             else:
                 try:
                     await member.send(dm_text)
                 except Exception:
                     pass
+                asyncio.create_task(send_erlc_command(f":pm {roblox_name} RFID Disruptor olmadan ATM soyamazsin!"))
             return
 
         # 5. Tüm Kontroller Başarılı: Discord DM Paneli Gönder
@@ -893,13 +889,13 @@ class ATMSoygunu(commands.Cog):
             if interaction:
                 await interaction.response.send_message("✅ **ATM kilit kırma paneli Discord DM kutunuza gönderildi!**", ephemeral=True)
             else:
-                await send_erlc_command(f":pm {roblox_name} ATM Kilit Kirma Paneli Discord DM kutunuza gonderildi!")
+                asyncio.create_task(send_erlc_command(f":pm {roblox_name} ATM Kilit Kirma Paneli Discord DM kutunuza gonderildi!"))
         except discord.Forbidden:
             err_msg = "❌ Discord DM kutunuz kapalı olduğu için soygun paneli gönderilemedi! Lütfen gizlilik ayarlarından sunucu üyelerinden gelen DM'leri açın."
             if interaction:
                 await interaction.response.send_message(err_msg, ephemeral=True)
             else:
-                await send_erlc_command(f":pm {roblox_name} Discord DM kutunuz kapali! Lutfen DM'leri acin.")
+                asyncio.create_task(send_erlc_command(f":pm {roblox_name} Discord DM kutunuz kapali! Lutfen DM'leri acin."))
 
     # =====================================================================
     # 3 AŞAMALI KİLİT KIRMA MİNİ OYUNU
@@ -1203,8 +1199,18 @@ class ATMSoygunu(commands.Cog):
     @app_commands.command(name="erlc-durum", description="ER:LC Event Webhook doğrulama durumunu ve oyundan gelen son ham JSON verilerini gösterir.")
     @app_commands.default_permissions(administrator=True)
     async def cmd_erlc_durum(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        outbound_ip = "Bilinmiyor"
+        try:
+            session = await self.get_session()
+            async with session.get("https://api.ipify.org", timeout=aiohttp.ClientTimeout(total=3)) as ip_resp:
+                if ip_resp.status == 200:
+                    outbound_ip = (await ip_resp.text()).strip()
+        except Exception:
+            pass
+
         embed = discord.Embed(
-            title="📡 ER:LC Event Webhook & Komut Alıcı Durumu (Aşama 0)",
+            title="📡 ER:LC Event Webhook & Komut Alıcı Durumu",
             color=discord.Color.green() if self._web_runner else discord.Color.red(),
             timestamp=datetime.now(tz_tr)
         )
@@ -1217,6 +1223,11 @@ class ATMSoygunu(commands.Cog):
             name="🔐 Ed25519 (PyNaCl)",
             value="✅ Aktif (Sıkı 401/200 Doğrulama)" if HAS_NACL else "❌ Yüklü Değil",
             inline=True
+        )
+        embed.add_field(
+            name="🌍 Bot Dış IP Adresi (ER:LC Allowlist)",
+            value=f"`{outbound_ip}`\n[👉 api.erlc.gg/server-owners](https://api.erlc.gg/server-owners)",
+            inline=False
         )
         embed.add_field(
             name="📊 İstatistikler",
@@ -1243,7 +1254,7 @@ class ATMSoygunu(commands.Cog):
                 inline=False
             )
 
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
 
 
