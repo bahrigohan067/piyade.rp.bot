@@ -295,10 +295,12 @@ class ATMSoygunu(commands.Cog):
         self.cooldowns: dict = self.data.get("cooldowns", {})
         self.islenen_komutlar: set = set()
         self.aktif_soygunlar: set = set()
+        self.son_webhook_kayitlari: list = []
+        self.toplam_gecerli_webhook: int = 0
+        self.toplam_reddedilen_probe: int = 0
         self._session: Optional[aiohttp.ClientSession] = None
         self._web_runner: Optional[web.AppRunner] = None
         self.bot_baslangic_zamani = time.time()
-        self.arkaplan_komut_loop.start()
 
         # Railway HTTP Webhook Sunucusu (ER:LC Event Webhook için)
         port_env = os.getenv("PORT")
@@ -310,7 +312,6 @@ class ATMSoygunu(commands.Cog):
                 print(f"[ATM SOYGUN WEB] Port ayar hatası: {e}", flush=True)
 
     def cog_unload(self):
-        self.arkaplan_komut_loop.cancel()
         if self._session and not self._session.closed:
             asyncio.create_task(self._session.close())
         if self._web_runner:
@@ -328,63 +329,156 @@ class ATMSoygunu(commands.Cog):
     # ── RESMİ ER:LC EVENT WEBHOOK ALICISI (HTTP POST /erlc-webhook) ──
     async def handle_erlc_event_webhook(self, request: web.Request):
         """
-        Roblox ER:LC Event Webhook entegrasyonu.
-        Oyuncuların oyun içinde ';' ile başlayan komutlarını (Örn: ;atmsoy) anlık yakalar.
+        Roblox ER:LC Event Webhook entegrasyonu (Resmi apidocs.erlc.gg/event-webhooks.md uyumlu).
+        - Başlıklar eksik, bozuk veya Ed25519 imzası geçersizse ZORUNLU olarak 401 (4xx) döner.
+        - Sadece geçerli imzalı isteklere 200 (2xx) döner.
         """
-        timestamp = request.headers.get("X-Signature-Timestamp", "")
-        sig_hex = request.headers.get("X-Signature-Ed25519", "")
         body_bytes = await request.read()
+        timestamp = request.headers.get("X-Signature-Timestamp")
+        sig_hex = request.headers.get("X-Signature-Ed25519")
 
-        # Ed25519 İmzası Doğrulama
-        if timestamp and sig_hex and HAS_NACL:
-            try:
-                raw_key = base64.b64decode(ERLC_PUBLIC_KEY_BASE64)[-32:]
-                verify_key = VerifyKey(raw_key)
-                sig_clean = sig_hex.strip()
-                if sig_clean.startswith("0x") or sig_clean.startswith("0X"):
-                    sig_clean = sig_clean[2:]
-                verify_key.verify(timestamp.strip().encode('utf-8') + body_bytes, bytes.fromhex(sig_clean))
-                print("[ER:LC EVENT WEBHOOK] İmza başarıyla doğrulandı ✅", flush=True)
-            except Exception as e:
-                # İmzayı doğrulamaya çalış ama ER:LC el sıkışmasının bozulmaması için 401 ile engelleme
-                print(f"[ER:LC EVENT WEBHOOK] İmza uyarısı (İşlem devam ediyor): {e}", flush=True)
+        # 1. Başlık kontrolü (Eksik veya boşsa 401 dön - ER:LC doğrulama testi için zorunlu)
+        if not timestamp or not sig_hex:
+            self.toplam_reddedilen_probe += 1
+            print("[ER:LC EVENT WEBHOOK] İmza başlığı eksik -> 401 döndürüldü (Doğrulama testi).", flush=True)
+            return web.Response(status=401, text="Missing signature headers")
+
+        if not HAS_NACL:
+            print("[ER:LC EVENT WEBHOOK HATA] PyNaCl yüklü değil!", flush=True)
+            return web.Response(status=500, text="PyNaCl not installed")
+
+        # 2. Hex çözümü ve Ed25519 imza doğrulaması (timestamp + raw_body)
+        try:
+            sig_bytes = bytes.fromhex(sig_hex)
+            if len(sig_bytes) != 64:
+                self.toplam_reddedilen_probe += 1
+                print("[ER:LC EVENT WEBHOOK] İmza uzunluğu geçersiz -> 401 döndürüldü.", flush=True)
+                return web.Response(status=401, text="Malformed signature length")
+
+            raw_key = base64.b64decode(ERLC_PUBLIC_KEY_BASE64)[-32:]
+            verify_key = VerifyKey(raw_key)
+            message_bytes = timestamp.encode("utf-8") + body_bytes
+            verify_key.verify(message_bytes, sig_bytes)
+        except (BadSignatureError, ValueError) as e:
+            self.toplam_reddedilen_probe += 1
+            print(f"[ER:LC EVENT WEBHOOK] Geçersiz imzalı istek reddedildi (401): {e}", flush=True)
+            return web.Response(status=401, text="Invalid signature")
+        except Exception as e:
+            self.toplam_reddedilen_probe += 1
+            print(f"[ER:LC EVENT WEBHOOK] İmza doğrulama hatası (401): {e}", flush=True)
+            return web.Response(status=401, text="Signature verification failed")
+
+        # 3. İmza Doğrulandı! Ham veriyi kaydet ve logla
+        raw_text = body_bytes.decode("utf-8", errors="replace")
+        self.toplam_gecerli_webhook += 1
+        zaman_str = datetime.now(tz_tr).strftime("%H:%M:%S")
+        self.son_webhook_kayitlari.append({
+            "zaman": zaman_str,
+            "timestamp": timestamp,
+            "raw": raw_text[:1500]
+        })
+        if len(self.son_webhook_kayitlari) > 15:
+            self.son_webhook_kayitlari.pop(0)
+
+        print(f"[ER:LC EVENT WEBHOOK] ✅ Geçerli İmzalı Veri Alındı ({zaman_str}): {raw_text}", flush=True)
+
+        if not body_bytes:
+            return web.json_response({"status": "ok"}, status=200)
 
         try:
-            data = json.loads(body_bytes.decode('utf-8'))
+            parsed = json.loads(raw_text)
         except Exception:
-            data = {}
+            return web.Response(status=400, text="Bad JSON")
 
-        event_type = str(data.get("event") or data.get("type") or "").strip().lower()
-        print(f"[ER:LC EVENT WEBHOOK] Event: '{event_type}' | Gelen Veri: {data}", flush=True)
+        # Liste veya tekil obje gelebilir
+        events = parsed if isinstance(parsed, list) else [parsed]
+        for ev in events:
+            if not isinstance(ev, dict):
+                continue
+            self._process_webhook_event_dict(ev)
 
-        # Oyuncu Adı ve ID Çözümleme (Tüm olası ER:LC JSON şemaları için)
-        p_obj = data.get("player") or data.get("data", {}).get("player") or {}
-        if isinstance(p_obj, dict):
-            player_name = str(p_obj.get("name") or p_obj.get("username") or p_obj.get("Player") or "").strip()
-            player_id = str(p_obj.get("userId") or p_obj.get("playerId") or p_obj.get("id") or "").strip()
-        else:
-            player_name = str(p_obj).strip()
-            player_id = str(data.get("playerId") or data.get("data", {}).get("playerId") or "").strip()
+        return web.json_response({"status": "ok"}, status=200)
 
-        # Komut Metni Çözümleme
-        cmd_text = str(
-            data.get("content") or 
-            data.get("command") or 
-            data.get("data", {}).get("command") or 
-            data.get("data", {}).get("content") or 
+    def _process_webhook_event_dict(self, data: dict):
+        """Gelen geçerli webhook JSON objesinden oyuncu ve komutu esnek şekilde çıkarır."""
+        inner = data.get("data") or data.get("payload") or data.get("event_data") or {}
+        if not isinstance(inner, dict):
+            inner = {}
+
+        # Komut / mesaj metnini tüm olası alanlardan ara
+        cmd_candidates = [
+            data.get("command"), data.get("Command"),
+            data.get("content"), data.get("Content"),
+            data.get("message"), data.get("Message"),
+            data.get("text"), data.get("Text"),
+            inner.get("command"), inner.get("Command"),
+            inner.get("content"), inner.get("Content"),
+            inner.get("message"), inner.get("Message"),
+            inner.get("text"), inner.get("Text"),
+        ]
+        cmd_text = ""
+        for c in cmd_candidates:
+            if isinstance(c, str) and c.strip():
+                cmd_text = c.strip()
+                break
+
+        # Oyuncu bilgisini tüm olası alanlardan ara
+        p_obj = (
+            data.get("player") or data.get("Player") or
+            data.get("user") or data.get("User") or
+            data.get("sender") or data.get("Sender") or
+            data.get("executor") or data.get("Executor") or
+            data.get("caller") or data.get("Caller") or
+            inner.get("player") or inner.get("Player") or
+            inner.get("user") or inner.get("User") or
+            inner.get("sender") or inner.get("Sender") or
+            inner.get("executor") or inner.get("Executor") or
+            inner.get("caller") or inner.get("Caller") or
             ""
-        ).strip().lower()
+        )
 
-        if any(t in cmd_text for t in [";atmsoy", ";atm-soy", ";atm soy", ":atmsoy", ":atm-soy", ":atm soy"]):
+        player_name = ""
+        player_id = ""
+        if isinstance(p_obj, dict):
+            player_name = str(
+                p_obj.get("name") or p_obj.get("Name") or
+                p_obj.get("username") or p_obj.get("Username") or
+                p_obj.get("playerName") or p_obj.get("PlayerName") or
+                p_obj.get("player") or p_obj.get("Player") or ""
+            ).strip()
+            player_id = str(
+                p_obj.get("id") or p_obj.get("Id") or p_obj.get("ID") or
+                p_obj.get("userId") or p_obj.get("UserId") or
+                p_obj.get("playerId") or p_obj.get("PlayerId") or ""
+            ).strip()
+        elif isinstance(p_obj, str):
+            player_name = p_obj.strip()
+
+        if not player_name:
+            player_name = str(
+                data.get("playerName") or data.get("PlayerName") or
+                data.get("username") or data.get("Username") or
+                inner.get("playerName") or inner.get("PlayerName") or
+                inner.get("username") or inner.get("Username") or ""
+            ).strip()
+
+        if not player_id:
+            player_id = str(
+                data.get("playerId") or data.get("PlayerId") or
+                data.get("userId") or data.get("UserId") or
+                inner.get("playerId") or inner.get("PlayerId") or
+                inner.get("userId") or inner.get("UserId") or ""
+            ).strip()
+
+        cmd_lower = cmd_text.lower()
+        if any(t in cmd_lower for t in [";atmsoy", ";atm-soy", ";atm soy", ":atmsoy", ":atm-soy", ":atm soy"]):
             log_payload = {
-                "Player": f"{player_name}:{player_id}" if player_id else player_name,
+                "Player": f"{player_name}:{player_id}" if (player_id and ":" not in player_name) else player_name,
                 "Command": cmd_text,
                 "Timestamp": int(time.time())
             }
-            print(f"[ER:LC EVENT WEBHOOK] ;atmsoy tetiklendi! Oyuncu: {player_name} (ID: {player_id})", flush=True)
+            print(f"[ER:LC EVENT WEBHOOK] ;atmsoy yakalandı -> Oyuncu: '{player_name}' (ID: '{player_id}') | Komut: '{cmd_text}'", flush=True)
             asyncio.create_task(self.handle_atmsoy_command(log_payload))
-
-        return web.json_response({"status": "success"}, status=200)
 
     async def start_web_server(self):
         try:
@@ -400,55 +494,6 @@ class ATMSoygunu(commands.Cog):
         except Exception as e:
             print(f"[ATM SOYGUN WEB HATA] Web sunucusu başlatılamadı: {e}", flush=True)
 
-    # ── ER:LC KOMUT LOGU DÖNGÜSÜ (Periyodik API Polling) ──
-    @tasks.loop(seconds=3)
-    async def arkaplan_komut_loop(self):
-        """
-        ER:LC API'sinden komut kayıtlarını (commandlogs) düzenli olarak çeker.
-        Oyuncuların oyun içi sohbete yazdığı ;atmsoy komutunu algılar.
-        """
-        if not self.bot.is_ready():
-            return
-
-        api_key = os.getenv("ERLC_API_KEY", "").strip("'\" \r\n\t")
-        if not api_key:
-            return
-
-        session = await self.get_session()
-        headers = {'Server-Key': api_key}
-        urls = [
-            'https://api.erlc.gg/v2/server/commandlogs',
-            'https://api.erlc.gg/v1/server/commandlogs'
-        ]
-
-        command_logs = None
-        for url in urls:
-            try:
-                async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=4)) as resp:
-                    if resp.status == 200:
-                        try:
-                            data = await resp.json()
-                            if isinstance(data, list):
-                                command_logs = data
-                                break
-                        except Exception:
-                            continue
-                    elif resp.status == 429:
-                        return
-            except Exception:
-                continue
-
-        if not command_logs or not isinstance(command_logs, list):
-            return
-
-        for log in command_logs:
-            cmd = str(log.get("Command") or log.get("command") or "").strip().lower()
-            if any(t in cmd for t in [";atmsoy", ";atm-soy", ";atm soy", ":atmsoy", ":atm-soy"]):
-                await self.handle_atmsoy_command(log)
-
-    @arkaplan_komut_loop.before_loop
-    async def before_arkaplan_komut_loop(self):
-        await self.bot.wait_until_ready()
 
     # ── ER:LC KOMUT LOGU DİNLEYİCİSİ (Dış event çağrıları için) ──
     @commands.Cog.listener("on_erlc_command_logs")
@@ -1080,44 +1125,52 @@ class ATMSoygunu(commands.Cog):
     async def cmd_atmsoy(self, interaction: discord.Interaction):
         await self.execute_atmsoy_flow(interaction.user, interaction.user.display_name, interaction=interaction)
 
-    # ── TEŞHİS & TEST KOMUTU (ER:LC API Bağlantı Durumu) ──
-    @app_commands.command(name="atm-komut-test", description="ER:LC CommandLogs API ve komut algılama durumunu test eder.")
+    # ── TEŞHİS & TEST KOMUTU (ER:LC Event Webhook Durumu ve Ham Veri Görüntüleyici) ──
+    @app_commands.command(name="erlc-durum", description="ER:LC Event Webhook doğrulama durumunu ve oyundan gelen son ham JSON verilerini gösterir.")
     @app_commands.default_permissions(administrator=True)
-    async def cmd_atm_komut_test(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
-        api_key = os.getenv("ERLC_API_KEY", "").strip("'\" \r\n\t")
-        if not api_key:
-            return await interaction.followup.send("❌ `ERLC_API_KEY` ortam değişkeni sunucuda ayarlanmamış!", ephemeral=True)
-
-        session = await self.get_session()
-        headers = {'Server-Key': api_key}
-
-        results = []
-        for url in ["https://api.erlc.gg/v2/server/commandlogs", "https://api.erlc.gg/v1/server/commandlogs"]:
-            try:
-                async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=5)) as resp:
-                    status = resp.status
-                    text = await resp.text()
-                    results.append(f"**URL:** `{url}`\n**HTTP Kod:** `{status}`\n**Cevap (İlk 300 Karakter):**\n```{text[:300]}```")
-            except Exception as e:
-                results.append(f"**URL:** `{url}`\n**Hata:** `{e}`")
-
+    async def cmd_erlc_durum(self, interaction: discord.Interaction):
         embed = discord.Embed(
-            title="🔍 ER:LC Command Logs API Test Raporu",
-            color=discord.Color.blue(),
+            title="📡 ER:LC Event Webhook & Komut Alıcı Durumu (Aşama 0)",
+            color=discord.Color.green() if self._web_runner else discord.Color.red(),
             timestamp=datetime.now(tz_tr)
         )
-        embed.description = "\n\n────────────────\n\n".join(results)
         embed.add_field(
-            name="💡 Önemli Bilgi",
+            name="🌐 Web Sunucusu",
+            value=f"{'✅ Aktif' if self._web_runner else '❌ Kapalı'} (`Port: {getattr(self, 'web_port', 'Yok')}`)",
+            inline=True
+        )
+        embed.add_field(
+            name="🔐 Ed25519 (PyNaCl)",
+            value="✅ Aktif (Sıkı 401/200 Doğrulama)" if HAS_NACL else "❌ Yüklü Değil",
+            inline=True
+        )
+        embed.add_field(
+            name="📊 İstatistikler",
             value=(
-                "Eğer ER:LC API komut loglarını vermiyorsa (403/404), Roblox ER:LC oyun içi sunucu ayarlarından "
-                "**'Komut Kayıtları Webhooku'** alanına bu sunucuda oluşturacağınız bir Discord Webhook bağlantısını yapıştırmanız yeterlidir!\n"
-                "Bot webhook üzerinden gelen `;atmsoy` komutlarını anlık (0 gecikmeyle) otomatik olarak yakalar."
+                f"🛡️ **Reddedilen Test Probe (401):** `{self.toplam_reddedilen_probe}`\n"
+                f"✅ **Geçerli İmzalı Webhook (200):** `{self.toplam_gecerli_webhook}`"
             ),
             inline=False
         )
-        await interaction.followup.send(embed=embed, ephemeral=True)
+
+        if self.son_webhook_kayitlari:
+            son_kayitlar_str = ""
+            for k in reversed(self.son_webhook_kayitlari[-5:]):
+                son_kayitlar_str += f"**[{k['zaman']}]** (ts: `{k['timestamp']}`)\n```json\n{k['raw'][:400]}\n```\n"
+            embed.add_field(
+                name="📥 Oyundan Gelen Son Ham Webhook Verileri (Raw JSON)",
+                value=son_kayitlar_str[:1020],
+                inline=False
+            )
+        else:
+            embed.add_field(
+                name="📥 Oyundan Gelen Son Ham Webhook Verileri",
+                value="*Henüz geçerli imzalı bir event gelmedi. Oyunda Event Webhook'u kaydedip sohbete `;atmsoy` yazın.*",
+                inline=False
+            )
+
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
 
 
 async def setup(bot: commands.Bot):
