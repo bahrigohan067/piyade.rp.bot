@@ -8,9 +8,20 @@ import random
 import string
 import asyncio
 import aiohttp
+from aiohttp import web
+import base64
 import re
 from datetime import datetime, timezone, timedelta
 from typing import Optional
+
+try:
+    from nacl.signing import VerifyKey
+    from nacl.exceptions import BadSignatureError
+    HAS_NACL = True
+except ImportError:
+    HAS_NACL = False
+
+ERLC_PUBLIC_KEY_BASE64 = "MCowBQYDK2VwAyEAjSICb9pp0kHizGQtdG8ySWsDChfGqi+gyFCttigBNOA="
 
 from config import GUILD_ID
 from cogs.envanter_sistemi import (
@@ -285,13 +296,25 @@ class ATMSoygunu(commands.Cog):
         self.islenen_komutlar: set = set()
         self.aktif_soygunlar: set = set()
         self._session: Optional[aiohttp.ClientSession] = None
+        self._web_runner: Optional[web.AppRunner] = None
         self.bot_baslangic_zamani = time.time()
         self.arkaplan_komut_loop.start()
+
+        # Railway HTTP Webhook Sunucusu (ER:LC Event Webhook için)
+        port_env = os.getenv("PORT")
+        if port_env:
+            try:
+                self.web_port = int(port_env)
+                self.bot.loop.create_task(self.start_web_server())
+            except Exception as e:
+                print(f"[ATM SOYGUN WEB] Port ayar hatası: {e}", flush=True)
 
     def cog_unload(self):
         self.arkaplan_komut_loop.cancel()
         if self._session and not self._session.closed:
             asyncio.create_task(self._session.close())
+        if self._web_runner:
+            asyncio.create_task(self._web_runner.cleanup())
 
     async def get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
@@ -301,6 +324,65 @@ class ATMSoygunu(commands.Cog):
     def save_data(self):
         self.data["cooldowns"] = self.cooldowns
         kaydet_soygun_data(self.data)
+
+    # ── RESMİ ER:LC EVENT WEBHOOK ALICISI (HTTP POST /erlc-webhook) ──
+    async def handle_erlc_event_webhook(self, request: web.Request):
+        """
+        Roblox ER:LC Event Webhook entegrasyonu.
+        Oyuncuların oyun içinde ';' ile başlayan komutlarını (Örn: ;atmsoy) anlık yakalar.
+        """
+        timestamp = request.headers.get("X-Signature-Timestamp", "")
+        sig_hex = request.headers.get("X-Signature-Ed25519", "")
+        body_bytes = await request.read()
+
+        # Ed25519 İmzası Doğrulama (Eğer başlıklar varsa)
+        if timestamp and sig_hex and HAS_NACL:
+            try:
+                raw_key = base64.b64decode(ERLC_PUBLIC_KEY_BASE64)[-32:]
+                verify_key = VerifyKey(raw_key)
+                verify_key.verify(timestamp.encode('utf-8') + body_bytes, bytes.fromhex(sig_hex))
+            except Exception as e:
+                print(f"[ER:LC EVENT WEBHOOK] Geçersiz imza: {e}", flush=True)
+                return web.Response(status=401, text="Invalid signature")
+
+        try:
+            data = json.loads(body_bytes.decode('utf-8'))
+        except Exception:
+            return web.Response(status=400, text="Bad JSON")
+
+        event_type = data.get("event")
+        print(f"[ER:LC EVENT WEBHOOK] Event alındı: {event_type}", flush=True)
+
+        if event_type == "Command":
+            cmd_data = data.get("data", {})
+            player_name = str(cmd_data.get("player") or "").strip()
+            player_id = str(cmd_data.get("playerId") or "").strip()
+            cmd_text = str(cmd_data.get("command") or "").strip().lower()
+
+            if any(t in cmd_text for t in [";atmsoy", ";atm-soy", ";atm soy", ":atmsoy", ":atm-soy"]):
+                log_payload = {
+                    "Player": f"{player_name}:{player_id}" if player_id else player_name,
+                    "Command": cmd_text,
+                    "Timestamp": int(time.time())
+                }
+                print(f"[ER:LC EVENT WEBHOOK] ;atmsoy yakalandı! Oyuncu: {player_name}", flush=True)
+                asyncio.create_task(self.handle_atmsoy_command(log_payload))
+
+        return web.json_response({"status": "ok"})
+
+    async def start_web_server(self):
+        try:
+            app = web.Application()
+            app.router.add_post("/erlc-webhook", self.handle_erlc_event_webhook)
+            app.router.add_get("/", lambda req: web.Response(text="Piyade RP Webhook Receiver Aktif"))
+            runner = web.AppRunner(app)
+            await runner.setup()
+            site = web.TCPSite(runner, "0.0.0.0", self.web_port)
+            await site.start()
+            print(f"[ATM SOYGUN WEB] ER:LC Event Webhook dinleyicisi 0.0.0.0:{self.web_port}/erlc-webhook üzerinde hazır!", flush=True)
+            self._web_runner = runner
+        except Exception as e:
+            print(f"[ATM SOYGUN WEB HATA] Web sunucusu başlatılamadı: {e}", flush=True)
 
     # ── ER:LC KOMUT LOGU DÖNGÜSÜ (Periyodik API Polling) ──
     @tasks.loop(seconds=3)
@@ -369,12 +451,24 @@ class ATMSoygunu(commands.Cog):
         if not (message.author.bot or message.webhook_id):
             return
 
-        # 1. Embed'leri kontrol et (ER:LC Command Webhook genellikle Embed gönderir)
+        # 1. Embed'leri kontrol et (ER:LC Command Webhook)
         for embed in message.embeds:
             cmd_val = ""
             player_val = ""
             user_id_val = ""
 
+            desc = embed.description or ""
+            title = embed.title or ""
+
+            # ER:LC Standart Formatı: "Bacon_Exe1341:3847447402 used the command: :mod Bacon_Exe1341"
+            m_used = re.search(r"\[?([A-Za-z0-9_]+)\]?(?::(\d+))?\s+used the command:\s*([^\n\r]+)", desc, re.IGNORECASE)
+            if m_used:
+                player_val = m_used.group(1).strip()
+                if m_used.group(2):
+                    user_id_val = m_used.group(2).strip()
+                cmd_val = m_used.group(3).strip()
+
+            # Alternatif field kontrolü
             for field in embed.fields:
                 fn = (field.name or "").strip().lower()
                 fv = (field.value or "").strip()
@@ -385,10 +479,9 @@ class ATMSoygunu(commands.Cog):
                 elif any(k in fn for k in ["user id", "userid", "roblox id", "roblox_id"]):
                     user_id_val = fv
 
-            combined_text = f"{message.content or ''} {embed.title or ''} {embed.description or ''} {cmd_val}".lower()
-            if any(trig in combined_text for trig in [";atmsoy", ";atm-soy", ";atm soy", ":atmsoy", ":atm-soy"]):
+            combined_text = f"{message.content or ''} {title} {desc} {cmd_val}".lower()
+            if any(trig in combined_text for trig in [";atmsoy", ";atm-soy", ";atm soy", ":atmsoy", ":atm-soy", ":atm soy"]):
                 if not player_val:
-                    desc = embed.description or message.content or ""
                     m_p = re.search(r"(?:Player|Oyuncu|Executor)[:\s*]+([A-Za-z0-9_]+)", desc, re.IGNORECASE)
                     if m_p:
                         player_val = m_p.group(1)
@@ -405,25 +498,34 @@ class ATMSoygunu(commands.Cog):
 
                     log_payload = {
                         "Player": f"{player_val}:{user_id_val}" if user_id_val else player_val,
-                        "Command": ";atmsoy",
+                        "Command": cmd_val or ";atmsoy",
                         "Timestamp": int(time.time())
                     }
-                    print(f"[ATM SOYGUN WEBHOOK] Webhook'tan ;atmsoy yakalandı! Oyuncu: {player_val}", flush=True)
+                    print(f"[ATM SOYGUN WEBHOOK] Webhook'tan atmsoy yakalandı! Oyuncu: {player_val} (ID: {user_id_val})", flush=True)
                     await self.handle_atmsoy_command(log_payload)
                     return
 
         # 2. Embedsiz düz metin kontrolü
         content_lower = (message.content or "").lower()
-        if any(trig in content_lower for trig in [";atmsoy", ";atm-soy", ";atm soy", ":atmsoy", ":atm-soy"]):
-            m_p = re.search(r"(?:player|oyuncu|kullanıcı)[:\s*]+([A-Za-z0-9_]+)", message.content, re.IGNORECASE)
-            if m_p:
-                p_name = m_p.group(1)
+        if any(trig in content_lower for trig in [";atmsoy", ";atm-soy", ";atm soy", ":atmsoy", ":atm-soy", ":atm soy"]):
+            m_used_plain = re.search(r"\[?([A-Za-z0-9_]+)\]?(?::(\d+))?\s+used the command:\s*([^\n\r]+)", message.content, re.IGNORECASE)
+            p_name = None
+            u_id = None
+            if m_used_plain:
+                p_name = m_used_plain.group(1)
+                u_id = m_used_plain.group(2)
+            else:
+                m_p = re.search(r"(?:player|oyuncu|kullanıcı)[:\s*]+([A-Za-z0-9_]+)", message.content, re.IGNORECASE)
+                if m_p:
+                    p_name = m_p.group(1)
+
+            if p_name:
                 log_payload = {
-                    "Player": p_name,
+                    "Player": f"{p_name}:{u_id}" if u_id else p_name,
                     "Command": ";atmsoy",
                     "Timestamp": int(time.time())
                 }
-                print(f"[ATM SOYGUN DÜZ METİN] Webhook metninden ;atmsoy yakalandı! Oyuncu: {p_name}", flush=True)
+                print(f"[ATM SOYGUN DÜZ METİN] Webhook metninden atmsoy yakalandı! Oyuncu: {p_name}", flush=True)
                 await self.handle_atmsoy_command(log_payload)
 
     async def handle_atmsoy_command(self, log: dict):
