@@ -348,7 +348,9 @@ class LiveRadar(commands.Cog):
             if not player_str:
                 continue
 
-            isim = player_str.split(':')[0]
+            parts = player_str.split(":", 1)
+            isim = parts[0].strip()
+            r_id = parts[1].strip() if len(parts) > 1 else ""
             loc = p.get("Location", {})
             x = loc.get("LocationX", 0)
             y = loc.get("LocationY", loc.get("Y", "-"))
@@ -358,6 +360,7 @@ class LiveRadar(commands.Cog):
             bina = loc.get("BuildingNumber", "-")
 
             yeni_aktif[isim] = {
+                "roblox_id": r_id,
                 "x": round(x, 1) if isinstance(x, (int, float)) else x,
                 "y": round(y, 1) if isinstance(y, (int, float)) else y,
                 "z": round(z, 1) if isinstance(z, (int, float)) else z,

@@ -390,8 +390,14 @@ class ATMSoygunu(commands.Cog):
         except Exception:
             return web.Response(status=400, text="Bad JSON")
 
-        # Liste veya tekil obje gelebilir
-        events = parsed if isinstance(parsed, list) else [parsed]
+        # ER:LC gerçek şeması: {"server": "...", "events": [{"event": "CustomCommand", "origin": "3847447402", "timestamp": 1792423782, "data": {"command": "atmsoy", "argument": ""}}]}
+        if isinstance(parsed, dict) and isinstance(parsed.get("events"), list):
+            events = parsed["events"]
+        elif isinstance(parsed, list):
+            events = parsed
+        else:
+            events = [parsed]
+
         for ev in events:
             if not isinstance(ev, dict):
                 continue
@@ -400,84 +406,88 @@ class ATMSoygunu(commands.Cog):
         return web.json_response({"status": "ok"}, status=200)
 
     def _process_webhook_event_dict(self, data: dict):
-        """Gelen geçerli webhook JSON objesinden oyuncu ve komutu esnek şekilde çıkarır."""
+        """
+        ER:LC Event Webhook'tan gelen her bir event objesini ayrıştırır.
+        Gerçek Şema:
+        {
+          "event": "CustomCommand",
+          "origin": "3847447402",
+          "timestamp": 1792423782,
+          "data": {"command": "atmsoy", "argument": ""}
+        }
+        """
+        event_type = str(data.get("event") or data.get("type") or "").strip()
+
+        # Doğrulama test isteğini (WebhookProbe) yok say
+        if event_type.lower() == "webhookprobe":
+            return
+
         inner = data.get("data") or data.get("payload") or data.get("event_data") or {}
         if not isinstance(inner, dict):
             inner = {}
 
-        # Komut / mesaj metnini tüm olası alanlardan ara
-        cmd_candidates = [
-            data.get("command"), data.get("Command"),
-            data.get("content"), data.get("Content"),
-            data.get("message"), data.get("Message"),
-            data.get("text"), data.get("Text"),
-            inner.get("command"), inner.get("Command"),
-            inner.get("content"), inner.get("Content"),
-            inner.get("message"), inner.get("Message"),
-            inner.get("text"), inner.get("Text"),
-        ]
-        cmd_text = ""
-        for c in cmd_candidates:
-            if isinstance(c, str) and c.strip():
-                cmd_text = c.strip()
-                break
+        # Origin (Roblox User ID) ve diğer olası oyuncu alanlarını oku
+        origin_val = str(data.get("origin") or data.get("Origin") or "").strip()
+        if origin_val.lower() == "global":
+            origin_val = ""
 
-        # Oyuncu bilgisini tüm olası alanlardan ara
+        # Komut ve argümanı oku (ER:LC başında ';' olmadan "atmsoy" olarak gönderir)
+        raw_cmd = str(
+            inner.get("command") or inner.get("Command") or
+            data.get("command") or data.get("Command") or
+            inner.get("content") or data.get("content") or
+            inner.get("message") or data.get("message") or ""
+        ).strip()
+        cmd_arg = str(
+            inner.get("argument") or inner.get("Argument") or
+            data.get("argument") or data.get("Argument") or ""
+        ).strip()
+
+        # Başındaki ';' veya ':' işaretlerini temizleyip küçük harfe çevir
+        cmd_clean = raw_cmd.lstrip(";: ").strip().lower()
+        if " " in cmd_clean and not cmd_arg:
+            parts = cmd_clean.split(" ", 1)
+            cmd_clean = parts[0].strip()
+            cmd_arg = parts[1].strip()
+
+        timestamp = data.get("timestamp") or data.get("Timestamp") or int(time.time())
+
+        # Gelecekteki tüm ';' komutları için genel bot eventi yayınla:
+        # Diğer tüm cog'lar @commands.Cog.listener("on_erlc_custom_command") ile dinleyebilir!
+        if cmd_clean:
+            self.bot.dispatch("erlc_custom_command", origin_val, cmd_clean, cmd_arg, timestamp, data)
+
+        # Oyuncu adı / ID yedek çözümleme (eski/alternatif şemalar için)
+        player_name = ""
+        player_id = origin_val
+
         p_obj = (
             data.get("player") or data.get("Player") or
-            data.get("user") or data.get("User") or
-            data.get("sender") or data.get("Sender") or
-            data.get("executor") or data.get("Executor") or
-            data.get("caller") or data.get("Caller") or
-            inner.get("player") or inner.get("Player") or
-            inner.get("user") or inner.get("User") or
-            inner.get("sender") or inner.get("Sender") or
-            inner.get("executor") or inner.get("Executor") or
-            inner.get("caller") or inner.get("Caller") or
-            ""
+            inner.get("player") or inner.get("Player") or ""
         )
-
-        player_name = ""
-        player_id = ""
         if isinstance(p_obj, dict):
-            player_name = str(
-                p_obj.get("name") or p_obj.get("Name") or
-                p_obj.get("username") or p_obj.get("Username") or
-                p_obj.get("playerName") or p_obj.get("PlayerName") or
-                p_obj.get("player") or p_obj.get("Player") or ""
-            ).strip()
-            player_id = str(
-                p_obj.get("id") or p_obj.get("Id") or p_obj.get("ID") or
-                p_obj.get("userId") or p_obj.get("UserId") or
-                p_obj.get("playerId") or p_obj.get("PlayerId") or ""
-            ).strip()
-        elif isinstance(p_obj, str):
+            player_name = str(p_obj.get("name") or p_obj.get("username") or p_obj.get("Player") or "").strip()
+            if not player_id:
+                player_id = str(p_obj.get("id") or p_obj.get("userId") or p_obj.get("playerId") or "").strip()
+        elif isinstance(p_obj, str) and p_obj.strip():
             player_name = p_obj.strip()
 
-        if not player_name:
-            player_name = str(
-                data.get("playerName") or data.get("PlayerName") or
-                data.get("username") or data.get("Username") or
-                inner.get("playerName") or inner.get("PlayerName") or
-                inner.get("username") or inner.get("Username") or ""
-            ).strip()
-
-        if not player_id:
-            player_id = str(
-                data.get("playerId") or data.get("PlayerId") or
-                data.get("userId") or data.get("UserId") or
-                inner.get("playerId") or inner.get("PlayerId") or
-                inner.get("userId") or inner.get("UserId") or ""
-            ).strip()
-
-        cmd_lower = cmd_text.lower()
-        if any(t in cmd_lower for t in [";atmsoy", ";atm-soy", ";atm soy", ":atmsoy", ":atm-soy", ":atm soy"]):
+        # ;atmsoy komutu kontrolü (hem 'atmsoy' hem ';atmsoy' desteklenir)
+        if cmd_clean in ("atmsoy", "atm-soy", "atm_soy") or any(
+            t in raw_cmd.lower() for t in [";atmsoy", ";atm-soy", ";atm soy", ":atmsoy", ":atm-soy"]
+        ):
             log_payload = {
-                "Player": f"{player_name}:{player_id}" if (player_id and ":" not in player_name) else player_name,
-                "Command": cmd_text,
-                "Timestamp": int(time.time())
+                "origin": player_id,
+                "Player": f"{player_name}:{player_id}" if (player_name and player_id) else (player_name or player_id),
+                "Command": cmd_clean or "atmsoy",
+                "argument": cmd_arg,
+                "Timestamp": timestamp
             }
-            print(f"[ER:LC EVENT WEBHOOK] ;atmsoy yakalandı -> Oyuncu: '{player_name}' (ID: '{player_id}') | Komut: '{cmd_text}'", flush=True)
+            print(
+                f"[ER:LC EVENT WEBHOOK] 🎯 ;atmsoy yakalandı! Origin(Roblox ID): '{player_id}' | "
+                f"Oyuncu: '{player_name}' | Komut: '{cmd_clean}'",
+                flush=True
+            )
             asyncio.create_task(self.handle_atmsoy_command(log_payload))
 
     async def start_web_server(self):
@@ -493,7 +503,6 @@ class ATMSoygunu(commands.Cog):
             self._web_runner = runner
         except Exception as e:
             print(f"[ATM SOYGUN WEB HATA] Web sunucusu başlatılamadı: {e}", flush=True)
-
 
     # ── ER:LC KOMUT LOGU DİNLEYİCİSİ (Dış event çağrıları için) ──
     @commands.Cog.listener("on_erlc_command_logs")
@@ -590,22 +599,21 @@ class ATMSoygunu(commands.Cog):
                 await self.handle_atmsoy_command(log_payload)
 
     async def handle_atmsoy_command(self, log: dict):
+        origin_id = str(log.get("origin") or log.get("roblox_id") or "").strip()
         player_raw = str(log.get("Player") or log.get("player") or log.get("executor") or log.get("Executor") or "").strip()
         timestamp = log.get("Timestamp") or log.get("timestamp") or 0
         command_str = str(log.get("Command") or log.get("command") or "").strip()
 
-        # Eski komutları filtrele (Bot başlangıcından önceki veya 90 saniyeden eski loglar)
+        # Eski komutları filtrele (90 saniyeden eski loglar)
         try:
             ts_float = float(timestamp)
             if ts_float > 1000000000:
                 if time.time() - ts_float > 90:
                     return
-                if ts_float < (self.bot_baslangic_zamani - 10):
-                    return
         except (ValueError, TypeError):
             pass
 
-        log_key = f"{player_raw}_{command_str}_{timestamp}"
+        log_key = f"{origin_id}_{player_raw}_{command_str}_{timestamp}"
         if log_key in self.islenen_komutlar:
             return
         self.islenen_komutlar.add(log_key)
@@ -613,7 +621,7 @@ class ATMSoygunu(commands.Cog):
             self.islenen_komutlar.clear()
 
         roblox_name = player_raw
-        roblox_id = ""
+        roblox_id = origin_id
 
         if "[" in roblox_name and "]" in roblox_name:
             roblox_name = roblox_name.split("[")[1].split("]")[0]
@@ -622,12 +630,49 @@ class ATMSoygunu(commands.Cog):
         if ":" in roblox_name:
             parts = roblox_name.split(":", 1)
             roblox_name = parts[0].strip()
-            roblox_id = parts[1].strip()
+            if not roblox_id:
+                roblox_id = parts[1].strip()
+
+        # Eğer roblox_name sadece rakamlardan oluşuyorsa (origin ID ise) onu roblox_id olarak al
+        if roblox_name.isdigit() and not roblox_id:
+            roblox_id = roblox_name
+            roblox_name = ""
+        elif roblox_name == roblox_id:
+            roblox_name = ""
+
+        # 1. LiveRadar üzerinden Roblox ID -> Roblox Kullanıcı Adı çözümlemesi
+        radar_cog = self.bot.get_cog("LiveRadar")
+        if radar_cog and roblox_id and not roblox_name:
+            for p_name, p_loc in (getattr(radar_cog, "aktif_oyuncular", {}) or {}).items():
+                if str(p_loc.get("roblox_id") or "") == str(roblox_id):
+                    roblox_name = p_name
+                    break
+            if not roblox_name:
+                for p_name, p_loc in (getattr(radar_cog, "son_konumlar", {}) or {}).items():
+                    if str(p_loc.get("roblox_id") or "") == str(roblox_id):
+                        roblox_name = p_name
+                        break
+
+        # 2. Hala roblox_name yoksa Roblox Resmi API'sinden (users.roblox.com) çek
+        if roblox_id and not roblox_name and roblox_id.isdigit():
+            try:
+                session = await self.get_session()
+                async with session.get(
+                    f"https://users.roblox.com/v1/users/{roblox_id}",
+                    timeout=aiohttp.ClientTimeout(total=4)
+                ) as r_resp:
+                    if r_resp.status == 200:
+                        r_data = await r_resp.json()
+                        roblox_name = str(r_data.get("name") or "").strip()
+                        print(f"[ATM SOYGUN] Roblox API'den ID {roblox_id} -> '{roblox_name}' çözümlendi.", flush=True)
+            except Exception as e:
+                print(f"[ATM SOYGUN] Roblox API kullanıcı sorgu hatası: {e}", flush=True)
 
         guild = self.bot.get_guild(GUILD_ID)
         if not guild:
             return
 
+        # 3. Discord Üyesini Bul (Önce kayit_data.json üzerinden roblox_id / roblox_name ile)
         discord_id = roblox_to_discord(roblox_id, roblox_name)
         member = None
         if discord_id:
@@ -638,14 +683,18 @@ class ATMSoygunu(commands.Cog):
                 except Exception:
                     member = None
 
+        # 4. Kayıt verisinde bulunamadıysa sunucu üyelerinin isim/takma adlarında roblox_name ara
         if not member and roblox_name:
             r_lower = roblox_name.lower()
             for m in guild.members:
-                if (r_lower == m.display_name.lower() or 
-                    r_lower in m.display_name.lower() or 
-                    r_lower == m.name.lower() or 
-                    r_lower in m.name.lower() or 
-                    (m.nick and r_lower in m.nick.lower())):
+                disp_parts = [p.strip().lower() for p in m.display_name.split("|")]
+                if (
+                    r_lower == m.display_name.lower() or
+                    r_lower in disp_parts or
+                    r_lower == m.name.lower() or
+                    (m.nick and r_lower == m.nick.lower()) or
+                    r_lower in m.display_name.lower()
+                ):
                     member = m
                     break
 
@@ -653,24 +702,39 @@ class ATMSoygunu(commands.Cog):
                 try:
                     queried = await guild.query_members(query=roblox_name, limit=5)
                     for qm in queried:
-                        if (r_lower == qm.display_name.lower() or 
-                            r_lower in qm.display_name.lower() or 
-                            r_lower == qm.name.lower() or 
-                            r_lower in qm.name.lower()):
+                        if (
+                            r_lower == qm.display_name.lower() or
+                            r_lower in qm.display_name.lower() or
+                            r_lower == qm.name.lower()
+                        ):
                             member = qm
                             break
                 except Exception as e:
                     print(f"[ATM SOYGUN] query_members hatası: {e}", flush=True)
 
         if not member:
-            print(f"[ATM SOYGUN] '{roblox_name}' için Discord eşleşmesi bulunamadı.", flush=True)
-            await send_erlc_command(f":pm {roblox_name} Discord hesabinizi Piyade RP ile eslestirmelisiniz!")
+            hedef_pm = roblox_name or roblox_id
+            print(f"[ATM SOYGUN] '{hedef_pm}' (ID: {roblox_id}) için Discord eşleşmesi bulunamadı.", flush=True)
+            if roblox_name:
+                await send_erlc_command(f":pm {roblox_name} Discord hesabinizi Piyade RP ile eslestirmelisiniz!")
             return
 
-        print(f"[ATM SOYGUN] {roblox_name} (Discord: {member.display_name} - {member.id}) için soygun tetiklendi.", flush=True)
-        await self.execute_atmsoy_flow(member, roblox_name)
+        # Eğer kayıttan member bulunduysa ama roblox_name hala boşsa kayıttaki adını veya display_name'ini al
+        if not roblox_name:
+            from cogs.envanter_sistemi import discord_to_roblox
+            r_ad, _ = discord_to_roblox(member.id, member.display_name)
+            roblox_name = r_ad or member.display_name
 
-    async def execute_atmsoy_flow(self, member: discord.Member, roblox_name: str, interaction: Optional[discord.Interaction] = None):
+        print(f"[ATM SOYGUN] ✅ {roblox_name} (Roblox ID: {roblox_id} -> Discord: {member.display_name} / {member.id}) için soygun başlatılıyor!", flush=True)
+        await self.execute_atmsoy_flow(member, roblox_name, roblox_id=roblox_id)
+
+    async def execute_atmsoy_flow(
+        self,
+        member: discord.Member,
+        roblox_name: str,
+        interaction: Optional[discord.Interaction] = None,
+        roblox_id: str = ""
+    ):
         # 1. Aktif Soygun Oturumu Kontrolü
         if member.id in self.aktif_soygunlar:
             msg = "⚠️ **Zaten devam eden aktif bir ATM kilit kırma işleminiz bulunuyor!** Lütfen Discord DM kutunuzu kontrol edin."
@@ -684,32 +748,42 @@ class ATMSoygunu(commands.Cog):
             return
 
         # 2. Canlı Radar ve ATM Yakınlık Kontrolü (Azami 6 metre)
-        uygun, durum, en_yakin_atm, mesafe, p_loc = kullanici_atm_kontrol(self.bot, member)
+        uygun, durum, hedef_atm, mesafe, p_loc = kullanici_atm_kontrol(self.bot, member)
 
-        # Eğer kullanici_atm_kontrol Discord adından roblox konumunu bulamazsa doğrudan roblox_name ile kontrol et
-        if (not uygun or not en_yakin_atm) and roblox_name:
+        # Eğer kullanici_atm_kontrol Discord adından konum bulamazsa doğrudan roblox_id veya roblox_name ile kontrol et
+        if not uygun or not hedef_atm:
             radar_cog = self.bot.get_cog("LiveRadar")
             if radar_cog:
                 aktif_oyuncular = getattr(radar_cog, "aktif_oyuncular", {}) or {}
                 p_loc_direct = None
-                for p_name, loc in aktif_oyuncular.items():
-                    if p_name.lower() == roblox_name.lower():
-                        p_loc_direct = loc
-                        break
+
+                if roblox_id:
+                    for p_name, loc in aktif_oyuncular.items():
+                        if str(loc.get("roblox_id") or "") == str(roblox_id):
+                            p_loc_direct = loc
+                            break
+
+                if not p_loc_direct and roblox_name:
+                    for p_name, loc in aktif_oyuncular.items():
+                        if p_name.lower() == roblox_name.lower():
+                            p_loc_direct = loc
+                            break
+
                 if p_loc_direct:
                     px = p_loc_direct.get("x")
                     pz = p_loc_direct.get("z")
                     if isinstance(px, (int, float)) and isinstance(pz, (int, float)):
                         max_mesafe = get_atm_max_mesafe()
-                        en_yakin, d = en_yakin_atm(px, pz)
-                        if en_yakin:
-                            en_yakin_atm = en_yakin
+                        yakin_atm, d = en_yakin_atm(px, pz)
+                        if yakin_atm:
+                            hedef_atm = yakin_atm
                             mesafe = d
                             p_loc = p_loc_direct
                             if d <= max_mesafe:
                                 uygun = True
-        if not uygun or not en_yakin_atm:
-            en_yakin_isim = en_yakin_atm['name'] if en_yakin_atm else "Bilinmiyor"
+
+        if not uygun or not hedef_atm:
+            en_yakin_isim = hedef_atm['name'] if hedef_atm else "Bilinmiyor"
             mesafe_str = f"{round(mesafe, 1)} metre" if mesafe is not None else "Bilinmiyor"
 
             await send_erlc_command(f":pm {roblox_name} Bir ATM cihazinin yaninda degilsiniz!")
@@ -795,9 +869,9 @@ class ATMSoygunu(commands.Cog):
         embed.description = (
             f"# 🔓 ATM Terminaline Bağlantı Sağlandı!\n"
             f"──────────────────────────────────────────\n"
-            f"🎯 **Hedeflenen ATM:** **{en_yakin_atm['name']}**\n"
-            f"📮 **Posta Kodu:** `{en_yakin_atm.get('postal', '-')}`\n"
-            f"🛣️ **Bölge:** `{en_yakin_atm.get('street', '-')}`\n"
+            f"🎯 **Hedeflenen ATM:** **{hedef_atm['name']}**\n"
+            f"📮 **Posta Kodu:** `{hedef_atm.get('postal', '-')}`\n"
+            f"🛣️ **Bölge:** `{hedef_atm.get('street', '-')}`\n"
             f"📡 **Ekipman:** `{GEREKLI_ESYA}` (Bypass Cihazı Devrede ✅)\n"
             f"──────────────────────────────────────────\n"
             f"Aşağıdaki **ATM'yi Soy** butonuna bastığınızda **3 aşamalı kilit kırma** süreci başlayacaktır:\n\n"
@@ -810,7 +884,7 @@ class ATMSoygunu(commands.Cog):
         embed.set_footer(text="Piyade RP • İllegal Kazanç & ATM Hack Sistemi")
 
         async def on_start():
-            await self.start_minigame(member, en_yakin_atm, roblox_name)
+            await self.start_minigame(member, hedef_atm, roblox_name)
 
         view = ATMBaslatView(member.id, on_start)
 

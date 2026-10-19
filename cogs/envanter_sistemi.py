@@ -239,9 +239,17 @@ def kullanici_atm_kontrol(bot: commands.Bot, member: discord.Member) -> tuple[bo
     aktif_oyuncular = getattr(radar_cog, "aktif_oyuncular", {}) or {}
 
     oyuncu_konum = None
-    
+
+    # 0. Önce Roblox ID ile anlık aktif oyuncular tablosundan ara (En kesin eşleşme)
+    if roblox_id:
+        for p_name, p_loc in aktif_oyuncular.items():
+            if str(p_loc.get("roblox_id") or "") == str(roblox_id):
+                oyuncu_konum = p_loc
+                roblox_ad = p_name
+                break
+
     # 1. Kayıtlı Roblox adıyla anlık aktif oyuncular tablosundan ara (büyük/küçük harf duyarsız)
-    if roblox_ad:
+    if not oyuncu_konum and roblox_ad:
         if roblox_ad in aktif_oyuncular:
             oyuncu_konum = aktif_oyuncular[roblox_ad]
         else:
