@@ -489,12 +489,12 @@ class RPOylama(commands.Cog):
         self.rp_aktif = True
         self.kaydet_durum()
 
-        # 1. Oyun sunucusunda bulunan herkesi doğma noktasına topla (:respawn)
-        print("[RP OYLAMA] Rol başladı: Oyuncuları doğma noktasına toplamak için :respawn gönderiliyor...", flush=True)
-        respawn_sonuc = await send_erlc_command(":respawn")
+        # 1. Oyun sunucusunda bulunan herkesi doğma noktasına topla (:respawn all)
+        print("[RP OYLAMA] Rol başladı: Oyuncuları doğma noktasına toplamak için :respawn all gönderiliyor...", flush=True)
+        respawn_sonuc = await send_erlc_command(":respawn all")
 
-        # 2. Herkes spawnda toplandıktan 3 saniye sonra ekran anonsu gönder
-        await asyncio.sleep(3)
+        # 2. Herkes spawnda toplandıktan sonra ekran anonsu gönder (ER:LC 5sn komut limiti için 5sn bekle)
+        await asyncio.sleep(5)
 
         # 3. Roblox ER:LC sunucusuna anons komutunu ilet (:m)
         erlc_komut = ":m RP Başlamıştır , herkese iyi roller."
@@ -667,7 +667,7 @@ class RPOylama(commands.Cog):
         anons_sonuc = await self.rolu_baslat(tetikleyen=interaction.user)
 
         if anons_sonuc and anons_sonuc.get("success"):
-            respawn_bilgi = "✅ `:respawn` iletildi" if anons_sonuc.get("respawn_sonuc", {}).get("success") else f"⚠️ `:respawn`: {anons_sonuc.get('respawn_sonuc', {}).get('message', 'iletilemedi')}"
+            respawn_bilgi = "✅ `:respawn all` iletildi" if anons_sonuc.get("respawn_sonuc", {}).get("success") else f"⚠️ `:respawn all`: {anons_sonuc.get('respawn_sonuc', {}).get('message', 'iletilemedi')}"
             anons_bilgi = f"{respawn_bilgi}\n✅ `{anons_sonuc.get('command')}` oyuna iletildi (HTTP {anons_sonuc.get('status')})"
         else:
             hata_mesaji = anons_sonuc.get("message") if anons_sonuc else "Bilinmeyen hata"
