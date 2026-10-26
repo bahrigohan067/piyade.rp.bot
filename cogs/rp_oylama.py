@@ -3,6 +3,7 @@ from discord.ext import commands, tasks
 from discord import app_commands
 import os
 import json
+import time
 import asyncio
 import aiohttp
 from datetime import datetime, timezone, timedelta
@@ -63,12 +64,15 @@ def clean_ascii_for_roblox(text: str) -> str:
         text = text.replace(tr_char, safe_char)
     return text
 
+_ERLC_CMD_LOCK = asyncio.Lock()
+_LAST_ERLC_CMD_TIME: float = 0.0
+
 async def send_erlc_command(command_text: str) -> dict:
     """
-    Roblox ER:LC sunucusuna uzaktan komut gönderir (Örn: :m).
-    Official endpoint: POST https://api.erlc.gg/v2/server/command
-    Fallback endpoint: POST https://api.erlc.gg/v1/server/command
+    Roblox ER:LC sunucusuna uzaktan komut gönderir (Örn: :m, :pm, :heal, :respawn all).
+    ER:LC 5 saniyede 1 komut sınırına sahip olduğu için merkezi kilit ile sıraya alır.
     """
+    global _LAST_ERLC_CMD_TIME
     api_key = os.getenv("ERLC_API_KEY", "").strip("'\" \r\n\t")
     if not api_key:
         msg = "ERLC_API_KEY ortam değişkeni bulunamadı! Lütfen Railway ortam değişkenlerini kontrol edin."
@@ -86,56 +90,64 @@ async def send_erlc_command(command_text: str) -> dict:
     url = "https://api.erlc.gg/v2/server/command"
     payload = {"command": clean_command}
 
-    try:
-        timeout = aiohttp.ClientTimeout(total=8)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.post(url, headers=headers, json=payload) as resp:
-                status = resp.status
-                resp_text = await resp.text()
+    async with _ERLC_CMD_LOCK:
+        elapsed = time.time() - _LAST_ERLC_CMD_TIME
+        if elapsed < 5.1:
+            await asyncio.sleep(5.1 - elapsed)
 
-                # Eğer v2 404 dönerse v1'i dene
-                if status == 404:
-                    url_v1 = "https://api.erlc.gg/v1/server/command"
-                    async with session.post(url_v1, headers=headers, json=payload) as resp_v1:
-                        status = resp_v1.status
-                        resp_text = await resp_v1.text()
+        try:
+            timeout = aiohttp.ClientTimeout(total=10)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.post(url, headers=headers, json=payload) as resp:
+                    status = resp.status
+                    resp_text = await resp.text()
+                    _LAST_ERLC_CMD_TIME = time.time()
 
-                # Eğer 429 (Rate Limit - 5 saniyede 1 komut) gelirse, 3 saniye bekleyip 1 kez otomatik tekrar dene
-                if status == 429:
-                    print(f"[RP OYLAMA UYARI] ER:LC API hız sınırına (429) takıldı. 3 saniye beklenip tekrar deneniyor: '{clean_command}'", flush=True)
-                    await asyncio.sleep(3)
-                    async with session.post(url, headers=headers, json=payload) as retry_resp:
-                        status = retry_resp.status
-                        resp_text = await retry_resp.text()
+                    # Eğer v2 404 dönerse v1'i dene
+                    if status == 404:
+                        url_v1 = "https://api.erlc.gg/v1/server/command"
+                        async with session.post(url_v1, headers=headers, json=payload) as resp_v1:
+                            status = resp_v1.status
+                            resp_text = await resp_v1.text()
+                            _LAST_ERLC_CMD_TIME = time.time()
 
-                if status in (200, 204):
-                    print(f"[RP OYLAMA BAŞARILI] Roblox ER:LC komutu iletildi: '{clean_command}' (HTTP {status})", flush=True)
-                    return {
-                        "success": True,
-                        "command": clean_command,
-                        "status": status,
-                        "message": f"Komut başarıyla oyuna iletildi (`{clean_command}`)."
-                    }
-                elif status == 422:
-                    msg = "Oyunda hiç oyuncu bulunmadığı için ER:LC komut çalıştıramadı (Sunucu boş veya kapalı)."
-                    print(f"[RP OYLAMA BİLGİ] {msg} ({resp_text})", flush=True)
-                    return {"success": False, "command": clean_command, "status": 422, "message": msg}
-                elif status == 429:
-                    msg = "ER:LC API hız sınırına (Rate Limit: 5 saniyede 1 komut) takıldı. Lütfen biraz bekleyin."
-                    print(f"[RP OYLAMA UYARI] {msg} ({resp_text})", flush=True)
-                    return {"success": False, "command": clean_command, "status": 429, "message": msg}
-                elif status == 403:
-                    msg = "ER:LC API anahtarı yetkisiz veya sunucu komut izni kapalı (HTTP 403)."
-                    print(f"[RP OYLAMA HATA] {msg} ({resp_text})", flush=True)
-                    return {"success": False, "command": command_text, "status": 403, "message": msg}
-                else:
-                    msg = f"HTTP {status}: {resp_text}"
-                    print(f"[RP OYLAMA HATA] ER:LC komut başarısız: {msg}", flush=True)
-                    return {"success": False, "command": command_text, "status": status, "message": msg}
-    except Exception as e:
-        msg = f"İstek hatası: {e}"
-        print(f"[RP OYLAMA HATA] {msg}", flush=True)
-        return {"success": False, "command": command_text, "status": None, "message": msg}
+                    # Eğer 429 (Rate Limit - 5 saniyede 1 komut) gelirse, 5.2 saniye bekleyip 1 kez otomatik tekrar dene
+                    if status == 429:
+                        print(f"[RP OYLAMA UYARI] ER:LC API hız sınırına (429) takıldı. 5.2 saniye beklenip tekrar deneniyor: '{clean_command}'", flush=True)
+                        await asyncio.sleep(5.2)
+                        async with session.post(url, headers=headers, json=payload) as retry_resp:
+                            status = retry_resp.status
+                            resp_text = await retry_resp.text()
+                            _LAST_ERLC_CMD_TIME = time.time()
+
+                    if status in (200, 204):
+                        print(f"[RP OYLAMA BAŞARILI] Roblox ER:LC komutu iletildi: '{clean_command}' (HTTP {status})", flush=True)
+                        return {
+                            "success": True,
+                            "command": clean_command,
+                            "status": status,
+                            "message": f"Komut başarıyla oyuna iletildi (`{clean_command}`)."
+                        }
+                    elif status == 422:
+                        msg = "Oyunda hiç oyuncu bulunmadığı için ER:LC komut çalıştıramadı (Sunucu boş veya kapalı)."
+                        print(f"[RP OYLAMA BİLGİ] {msg} ({resp_text})", flush=True)
+                        return {"success": False, "command": clean_command, "status": 422, "message": msg}
+                    elif status == 429:
+                        msg = "ER:LC API hız sınırına (Rate Limit: 5 saniyede 1 komut) takıldı. Lütfen biraz bekleyin."
+                        print(f"[RP OYLAMA UYARI] {msg} ({resp_text})", flush=True)
+                        return {"success": False, "command": clean_command, "status": 429, "message": msg}
+                    elif status == 403:
+                        msg = "ER:LC API anahtarı yetkisiz veya IP adresi izinli listede değil (HTTP 403)."
+                        print(f"[RP OYLAMA HATA] {msg} ({resp_text})", flush=True)
+                        return {"success": False, "command": command_text, "status": 403, "message": msg}
+                    else:
+                        msg = f"HTTP {status}: {resp_text}"
+                        print(f"[RP OYLAMA HATA] ER:LC komut başarısız: {msg}", flush=True)
+                        return {"success": False, "command": command_text, "status": status, "message": msg}
+        except Exception as e:
+            msg = f"İstek hatası: {e}"
+            print(f"[RP OYLAMA HATA] {msg}", flush=True)
+            return {"success": False, "command": command_text, "status": None, "message": msg}
 
 async def send_erlc_announcement(command_text: str = ":m RP Başlamıştır , herkese iyi roller.") -> dict:
     """Geriye uyumluluk için send_erlc_announcement fonksiyonu send_erlc_command'ı çağırır."""
