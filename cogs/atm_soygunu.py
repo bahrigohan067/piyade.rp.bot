@@ -58,6 +58,39 @@ def yukle_soygun_data() -> dict:
     return {"cooldowns": {}}
 
 
+def normalize_erlc_cmd(text: str) -> str:
+    """
+    ER:LC veya chat üzerinden gelen komut metnini güvenli, küçük harfli ve
+    Türkçe-İngilizce harf varyasyonlarından arındırılmış saf ASCII haline getirir.
+    Örn: ';İlkyardım' -> 'ilkyardim', ';ilk yardım' -> 'ilkyardim'
+    """
+    if not text:
+        return ""
+    t = str(text).strip().lstrip(";:!/. \t\r\n")
+    # Önce büyük harf Türkçeleri değiştir (Python lower'ın combining dot \u0307 üretmesini engellemek için)
+    t = (
+        t.replace("İ", "i")
+        .replace("I", "i")
+        .replace("Ş", "s")
+        .replace("Ğ", "g")
+        .replace("Ü", "u")
+        .replace("Ö", "o")
+        .replace("Ç", "c")
+    )
+    t = t.lower()
+    t = (
+        t.replace("\u0307", "")
+        .replace("ı", "i")
+        .replace("ş", "s")
+        .replace("ğ", "g")
+        .replace("ü", "u")
+        .replace("ö", "o")
+        .replace("ç", "c")
+        .strip()
+    )
+    return t
+
+
 def kaydet_soygun_data(data: dict):
     try:
         os.makedirs(os.path.dirname(DATA_FILE), exist_ok=True)
@@ -443,18 +476,27 @@ class ATMSoygunu(commands.Cog):
             data.get("argument") or data.get("Argument") or ""
         ).strip()
 
-        # Başındaki ';' veya ':' işaretlerini temizleyip küçük harfe çevir
-        cmd_clean = raw_cmd.lstrip(";: ").strip().lower()
+        # Komut adını ayrıştır ve normalize et
+        cmd_clean = raw_cmd.lstrip(";:!/ ").strip()
         if " " in cmd_clean and not cmd_arg:
             parts = cmd_clean.split(" ", 1)
             cmd_clean = parts[0].strip()
             cmd_arg = parts[1].strip()
 
+        cmd_norm = normalize_erlc_cmd(cmd_clean)
+        arg_norm = normalize_erlc_cmd(cmd_arg)
         timestamp = data.get("timestamp") or data.get("Timestamp") or int(time.time())
+
+        # Gelen tüm CustomCommand eventleri için net ve görünür merkezi log (Aşama B)
+        print(
+            f"[ER:LC KOMUT GELDİ] Tür: '{event_type}' | Origin (Roblox ID): '{origin_val}' | "
+            f"Ham: {raw_cmd!r} -> Temiz: '{cmd_clean}' (Normalize: '{cmd_norm}') | Argüman: {cmd_arg!r}",
+            flush=True
+        )
 
         # Gelecekteki tüm ';' komutları için genel bot eventi yayınla:
         # Diğer tüm cog'lar @commands.Cog.listener("on_erlc_custom_command") ile dinleyebilir!
-        if cmd_clean:
+        if cmd_clean or cmd_norm:
             self.bot.dispatch("erlc_custom_command", origin_val, cmd_clean, cmd_arg, timestamp, data)
 
         # Oyuncu adı / ID yedek çözümleme (eski/alternatif şemalar için)
@@ -472,10 +514,13 @@ class ATMSoygunu(commands.Cog):
         elif isinstance(p_obj, str) and p_obj.strip():
             player_name = p_obj.strip()
 
-        # ;atmsoy komutu kontrolü (hem 'atmsoy' hem ';atmsoy' desteklenir)
-        if cmd_clean in ("atmsoy", "atm-soy", "atm_soy") or any(
-            t in raw_cmd.lower() for t in [";atmsoy", ";atm-soy", ";atm soy", ":atmsoy", ":atm-soy"]
-        ):
+        # 1. ;atmsoy komutu kontrolü (hem 'atmsoy' hem ';atmsoy' ve varyasyonlar desteklenir)
+        is_atmsoy = (
+            cmd_norm in ("atmsoy", "atm-soy", "atm_soy") or
+            cmd_norm.replace("-", "").replace("_", "") == "atmsoy" or
+            any(t in raw_cmd.lower() for t in [";atmsoy", ";atm-soy", ";atm soy", ":atmsoy", ":atm-soy"])
+        )
+        if is_atmsoy:
             log_payload = {
                 "origin": player_id,
                 "Player": f"{player_name}:{player_id}" if (player_name and player_id) else (player_name or player_id),
@@ -489,6 +534,30 @@ class ATMSoygunu(commands.Cog):
                 flush=True
             )
             asyncio.create_task(self.handle_atmsoy_command(log_payload))
+            return
+
+        # 2. ;ilkyardım komutu kontrolü (merkezi takip için)
+        comp_norm = cmd_norm.replace("-", "").replace("_", "").replace(" ", "")
+        is_ilkyardim = (
+            comp_norm == "ilkyardim" or
+            cmd_norm in ("ilkyardim", "ilk-yardim", "ilk_yardim", "iy") or
+            (cmd_norm == "ilk" and "yardim" in arg_norm) or
+            cmd_norm in ("yardim", "yardım")
+        )
+        if is_ilkyardim:
+            print(
+                f"[ER:LC EVENT WEBHOOK] 🎯 ;ilkyardım yakalandı! İlk yardım modülüne (dispatch) iletildi. Origin: '{origin_val}'",
+                flush=True
+            )
+            return
+
+        # 3. Bilinmeyen komut uyarısı (Aşama B)
+        if event_type.lower() == "customcommand":
+            print(
+                f"[ER:LC BİLİNMEYEN KOMUT] ⚠️ Sistemde kayıtlı olmayan bir komut kullanıldı: '{cmd_clean}' "
+                f"(Normalize: '{cmd_norm}') | Origin: '{origin_val}'",
+                flush=True
+            )
 
     async def start_web_server(self):
         try:

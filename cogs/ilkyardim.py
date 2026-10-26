@@ -78,26 +78,37 @@ def farkli_dizilim_uret(asamalar: list[str]) -> list[tuple[int, str]]:
     return list(secilen)
 
 
-def normalize_cmd(text: str) -> str:
-    """Türkçe karakterleri normalize ederek komut karşılaştırmasını güvenilir yapar."""
-    return (
-        text.replace("i\u0307", "i")
-        .replace("İ", "i")
+def normalize_erlc_cmd(text: str) -> str:
+    """
+    ER:LC veya chat üzerinden gelen komut metnini güvenli, küçük harfli ve
+    Türkçe-İngilizce harf varyasyonlarından arındırılmış saf ASCII haline getirir.
+    Örn: ';İlkyardım' -> 'ilkyardim', ';ilk yardım' -> 'ilkyardim'
+    """
+    if not text:
+        return ""
+    t = str(text).strip().lstrip(";:!/. \t\r\n")
+    # Önce büyük harf Türkçeleri değiştir (Python lower'ın combining dot \u0307 üretmesini engellemek için)
+    t = (
+        t.replace("İ", "i")
         .replace("I", "i")
+        .replace("Ş", "s")
+        .replace("Ğ", "g")
+        .replace("Ü", "u")
+        .replace("Ö", "o")
+        .replace("Ç", "c")
+    )
+    t = t.lower()
+    t = (
+        t.replace("\u0307", "")
         .replace("ı", "i")
         .replace("ş", "s")
-        .replace("Ş", "s")
         .replace("ğ", "g")
-        .replace("Ğ", "g")
         .replace("ü", "u")
-        .replace("Ü", "u")
         .replace("ö", "o")
-        .replace("Ö", "o")
         .replace("ç", "c")
-        .replace("Ç", "c")
-        .lower()
         .strip()
     )
+    return t
 
 
 # =====================================================================
@@ -257,18 +268,25 @@ class IlkYardimSistemi(commands.Cog):
     # ── 1. ER:LC EVENT WEBHOOK DİNLEYİCİSİ (;ilkyardım) ──
     @commands.Cog.listener("on_erlc_custom_command")
     async def on_erlc_custom_command(self, origin_id: str, cmd_clean: str, cmd_arg: str, timestamp: any, raw_data: dict):
-        cmd_norm = normalize_cmd(cmd_clean)
-        arg_norm = normalize_cmd(cmd_arg)
+        cmd_norm = normalize_erlc_cmd(cmd_clean)
+        arg_norm = normalize_erlc_cmd(cmd_arg)
+        comp_norm = cmd_norm.replace("-", "").replace("_", "").replace(" ", "")
 
-        # ;ilkyardım, ;ilkyardim, ;ilk-yardım, ;ilk yardım vb. tüm yazılışları yakala
+        # ;ilkyardım, ;ilkyardim, ;İlkyardım, ;ILKYARDIM, ;ilk-yardım, ;ilk yardım, ;iy, ;yardım vb. tüm yazılışları yakala
         is_ilkyardim = (
-            cmd_norm in ("ilkyardim", "ilk-yardim", "ilk_yardim") or
-            (cmd_norm == "ilk" and arg_norm.startswith("yardim"))
+            comp_norm == "ilkyardim" or
+            cmd_norm in ("ilkyardim", "ilk-yardim", "ilk_yardim", "iy") or
+            (cmd_norm == "ilk" and "yardim" in arg_norm) or
+            cmd_norm in ("yardim", "yardım")
         )
         if not is_ilkyardim:
             return
 
-        print(f"[İLK YARDIM WEBHOOK] 🎯 ;ilkyardım yakalandı! Origin(Roblox ID): '{origin_id}' | Komut: '{cmd_clean}'", flush=True)
+        print(
+            f"[İLK YARDIM WEBHOOK] 🎯 ;ilkyardım algılandı! Origin(Roblox ID): '{origin_id}' | "
+            f"Ham: {cmd_clean!r} (Normalize: '{cmd_norm}') | Argüman: {cmd_arg!r}",
+            flush=True
+        )
         await self.handle_ilkyardim_trigger(
             origin_id=origin_id,
             player_raw="",
@@ -285,8 +303,8 @@ class IlkYardimSistemi(commands.Cog):
         for embed in message.embeds:
             desc = embed.description or ""
             title = embed.title or ""
-            combined = normalize_cmd(f"{message.content or ''} {title} {desc}")
-            if any(t in combined for t in [";ilkyardim", ";ilk-yardim", ":ilkyardim"]):
+            combined = normalize_erlc_cmd(f"{message.content or ''} {title} {desc}")
+            if any(t in combined for t in ["ilkyardim", "ilk-yardim", "ilk yardim", "yardim"]):
                 m_used = re.search(r"\[?([A-Za-z0-9_]+)\]?(?::(\d+))?\s+used the command:\s*([^\n\r]+)", desc, re.IGNORECASE)
                 if m_used:
                     p_name = m_used.group(1).strip()
@@ -341,6 +359,7 @@ class IlkYardimSistemi(commands.Cog):
 
         guild = self.bot.get_guild(GUILD_ID)
         if not guild:
+            print("[İLK YARDIM HATA] Discord sunucusu (Guild) bulunamadı!", flush=True)
             return
 
         # 3. Discord Üyesini Bul
@@ -382,10 +401,11 @@ class IlkYardimSistemi(commands.Cog):
                 except Exception:
                     pass
 
+        # Discord eşleşmesi bulunamadıysa (Aşama C: Tam geri bildirim)
         if not member:
-            print(f"[İLK YARDIM] '{roblox_name or roblox_id}' için Discord eşleşmesi bulunamadı.", flush=True)
+            print(f"[İLK YARDIM HATA] '{roblox_name or roblox_id}' için Discord kaydı/eşleşmesi bulunamadı!", flush=True)
             if roblox_name:
-                asyncio.create_task(send_erlc_command(f":pm {roblox_name} Discord hesabinizi Piyade RP ile eslestirmelisiniz!"))
+                asyncio.create_task(send_erlc_command(f":pm {roblox_name} Ilk yardim icin Discord hesabinizi Piyade RP ile eslestirmelisiniz!"))
             return
 
         if not roblox_name:
@@ -400,7 +420,7 @@ class IlkYardimSistemi(commands.Cog):
             interaction=None
         )
 
-    def _en_yakin_oyuncuyu_bul(
+    async def _en_yakin_oyuncuyu_bul(
         self,
         member: discord.Member,
         healer_roblox_name: str,
@@ -409,13 +429,28 @@ class IlkYardimSistemi(commands.Cog):
         """
         Komutu kullanan oyuncunun konumunu bulur ve KENDİSİ HARİÇ en yakınındaki
         oyuncuyu ve mesafesini döndürür.
+        Aşama D: Canlı radar API'sinden taze konum çeker.
         Dönüş: (uygun_mu, durum_kodu, hedef_roblox_adi, mesafe, healer_konumu)
         """
         radar_cog = self.bot.get_cog("LiveRadar")
         if not radar_cog:
             return False, "radar_yok", None, None, None
 
-        aktif_oyuncular = getattr(radar_cog, "aktif_oyuncular", {}) or {}
+        # Taze konumları al
+        aktif_oyuncular = {}
+        if hasattr(radar_cog, "get_taze_oyuncu_konumlari"):
+            try:
+                aktif_oyuncular = await radar_cog.get_taze_oyuncu_konumlari()
+            except Exception as e:
+                print(f"[İLK YARDIM] Taze konum çekme hatası (önbelleğe geçiliyor): {e}", flush=True)
+                aktif_oyuncular = getattr(radar_cog, "aktif_oyuncular", {}) or {}
+        else:
+            aktif_oyuncular = getattr(radar_cog, "aktif_oyuncular", {}) or {}
+
+        if not aktif_oyuncular:
+            # Yedek: son_konumlar
+            aktif_oyuncular = getattr(radar_cog, "son_konumlar", {}) or {}
+
         if not aktif_oyuncular:
             return False, "oyunda_degil", None, None, None
 
@@ -455,6 +490,15 @@ class IlkYardimSistemi(commands.Cog):
                 if healer_loc:
                     break
 
+        # 4. Hala bulunamadıysa radarın son_konumlar önbelleğini tara
+        if not healer_loc and hasattr(radar_cog, "son_konumlar"):
+            for p_name, p_loc in (radar_cog.son_konumlar or {}).items():
+                p_rid = str(p_loc.get("roblox_id") or "")
+                if (aranan_id and p_rid == aranan_id) or (aranan_ad and p_name.lower() == aranan_ad.lower()):
+                    healer_gercek_ad = p_name
+                    healer_loc = p_loc
+                    break
+
         if not healer_loc or not healer_gercek_ad:
             return False, "oyunda_degil", None, None, None
 
@@ -463,7 +507,7 @@ class IlkYardimSistemi(commands.Cog):
         if not isinstance(hx, (int, float)) or not isinstance(hz, (int, float)):
             return False, "konum_gecersiz", None, None, healer_loc
 
-        # 4. KENDİSİ HARİÇ en yakın oyuncuyu bul ([ Bir kullanıcı kendine ilkyardım uygulayamaz. ])
+        # 5. KENDİSİ HARİÇ en yakın oyuncuyu bul ([ Bir kullanıcı kendine ilkyardım uygulayamaz. ])
         en_yakin_hedef = None
         min_dist = float("inf")
 
@@ -507,17 +551,21 @@ class IlkYardimSistemi(commands.Cog):
         # 1. Aktif ilk yardım işlemi kontrolü
         if member.id in self.aktif_ilkyardimlar:
             msg = "⚠️ **Zaten devam eden aktif bir ilk yardım müdahaleniz bulunuyor!** Lütfen Discord DM kutunuzu kontrol edin."
+            print(f"[İLK YARDIM BİLGİ] {healer_roblox_name} zaten devam eden bir ilk yardıma sahip.", flush=True)
             if interaction:
                 return await interaction.response.send_message(msg, ephemeral=True)
             try:
                 await member.send(msg)
             except Exception:
                 pass
+            if healer_roblox_name:
+                asyncio.create_task(send_erlc_command(f":pm {healer_roblox_name} Zaten aktif ilk yardiminiz var! Discord DM kutunuzu kontrol edin."))
             return
 
         # 2. Kullanıcı argüman olarak kendi adını yazdıysa engelle ([ Bir kullanıcı kendine ilkyardım uygulayamaz. ])
         if cmd_arg and healer_roblox_name and cmd_arg.strip().lower() == healer_roblox_name.strip().lower():
-            msg = "❌ **Kendinize ilk yardım uygulayamazsınız!** İlk yardım yalnızca yakınınızdaki başka bir oyuncuya uygulanabilir."
+            msg = "❌ **Kendinize ilk yardım uygulayamazsınız!** İlk yardım yalnızca yakınınızdaki başka bir yaralıya uygulanabilir."
+            print(f"[İLK YARDIM UYARI] {healer_roblox_name} kendine ilk yardım uygulamaya çalıştı.", flush=True)
             if interaction:
                 return await interaction.response.send_message(msg, ephemeral=True)
             try:
@@ -527,8 +575,8 @@ class IlkYardimSistemi(commands.Cog):
             asyncio.create_task(send_erlc_command(f":pm {healer_roblox_name} Kendinize ilk yardim uygulayamazsiniz!"))
             return
 
-        # 3. En yakındaki oyuncuyu ve 6 birim yakınlık şartını kontrol et
-        uygun, durum, hedef_oyuncu, mesafe, healer_loc = self._en_yakin_oyuncuyu_bul(
+        # 3. En yakındaki oyuncuyu ve 6 birim yakınlık şartını kontrol et (Aşama D)
+        uygun, durum, hedef_oyuncu, mesafe, healer_loc = await self._en_yakin_oyuncuyu_bul(
             member, healer_roblox_name, healer_roblox_id
         )
 
@@ -538,12 +586,16 @@ class IlkYardimSistemi(commands.Cog):
                     "❌ **Oyun İçi Konumunuz Tespit Edilemedi!**\n"
                     "İlk yardım uygulayabilmek için ER:LC sunucusunda aktif olmalısınız."
                 )
+                pm_text = f":pm {healer_roblox_name} Konumunuz alinamadi! ER:LC sunucusunda aktif oldugunuzdan emin olun."
+                print(f"[İLK YARDIM HATA] {healer_roblox_name} konum tespit edilemedi (oyunda değil veya radarda yok).", flush=True)
             elif durum == "baska_oyuncu_yok":
                 dm_text = (
                     "❌ **Yakınınızda Başka Bir Oyuncu Bulunmuyor!**\n"
                     "Sunucuda şu anda ilk yardım uygulayabileceğiniz başka bir oyuncu yok.\n"
                     "*(Unutmayın: Bir kullanıcı kendisine ilk yardım uygulayamaz!)*"
                 )
+                pm_text = f":pm {healer_roblox_name} Sunucuda ilk yardim uygulayabileceginiz baska oyuncu yok!"
+                print(f"[İLK YARDIM BİLGİ] {healer_roblox_name} çevresinde başka oyuncu yok.", flush=True)
             else:
                 en_yakin_str = f"**{hedef_oyuncu}** (`{round(mesafe, 1)} birim`)" if (hedef_oyuncu and mesafe is not None) else "Yok"
                 dm_text = (
@@ -552,6 +604,9 @@ class IlkYardimSistemi(commands.Cog):
                     f"🧍 **En Yakın Oyuncu:** {en_yakin_str}\n"
                     f"📏 **Gereken Mesafe:** `Azami 6 birim`"
                 )
+                pm_hedef = f"En yakin: {hedef_oyuncu} ({round(mesafe, 1)}m)" if (hedef_oyuncu and mesafe is not None) else ""
+                pm_text = f":pm {healer_roblox_name} 6 birim yakininizda kimse yok! {pm_hedef}".strip()
+                print(f"[İLK YARDIM BİLGİ] {healer_roblox_name} için en yakın oyuncu {hedef_oyuncu} ({round(mesafe, 1) if mesafe else '?'}m > 6m).", flush=True)
 
             if interaction:
                 return await interaction.response.send_message(dm_text, ephemeral=True)
@@ -560,7 +615,7 @@ class IlkYardimSistemi(commands.Cog):
             except Exception:
                 pass
             if healer_roblox_name:
-                asyncio.create_task(send_erlc_command(f":pm {healer_roblox_name} 6 birim yakininizda ilk yardim uygulanacak bir oyuncu yok!"))
+                asyncio.create_task(send_erlc_command(pm_text))
             return
 
         # 4. DM Kanalını Aç ve 3 Butonlu İlk Yardım Panelini Gönder
@@ -573,6 +628,8 @@ class IlkYardimSistemi(commands.Cog):
             err = "❌ Discord DM kanalınız açılamadı."
             if interaction:
                 return await interaction.response.send_message(err, ephemeral=True)
+            if healer_roblox_name:
+                asyncio.create_task(send_erlc_command(f":pm {healer_roblox_name} Discord DM kanaliniz acilamadi!"))
             return
 
         self.aktif_ilkyardimlar.add(member.id)
@@ -618,20 +675,22 @@ class IlkYardimSistemi(commands.Cog):
 
         try:
             await dm_channel.send(embed=embed, view=view)
+            print(f"[İLK YARDIM BİLGİ] {healer_roblox_name} -> {hedef_oyuncu} ({round(mesafe, 1)}m) DM paneli başarıyla gönderildi.", flush=True)
             if interaction:
                 await interaction.response.send_message(
                     f"✅ **{hedef_oyuncu}** için ilk yardım müdahale paneli Discord DM kutunuza gönderildi!",
                     ephemeral=True
                 )
             else:
-                asyncio.create_task(send_erlc_command(f":pm {healer_roblox_name} Ilk yardim paneli Discord DM kutunuza gonderildi!"))
+                asyncio.create_task(send_erlc_command(f":pm {healer_roblox_name} Ilk yardim paneli Discord DM kutunuza iletildi!"))
         except discord.Forbidden:
             self.aktif_ilkyardimlar.discard(member.id)
             err_msg = "❌ Discord DM kutunuz kapalı olduğu için ilk yardım paneli gönderilemedi! Lütfen DM'lerinizi açın."
+            print(f"[İLK YARDIM HATA] {healer_roblox_name} ({member}) Discord DM kutusu kapalı!", flush=True)
             if interaction:
                 await interaction.response.send_message(err_msg, ephemeral=True)
             else:
-                asyncio.create_task(send_erlc_command(f":pm {healer_roblox_name} Discord DM kutunuz kapali! Lutfen DM'leri acin."))
+                asyncio.create_task(send_erlc_command(f":pm {healer_roblox_name} Discord DM kutunuz kapali! Lutfen DM ayarinizi acip tekrar deneyin."))
 
     async def baslat_asama_sureci(
         self,
@@ -672,14 +731,18 @@ class IlkYardimSistemi(commands.Cog):
                 pass
 
             # Oyun içinde ":heal [kullanıcı adı]" komutunu çalıştır
-            print(f"[İLK YARDIM BAŞARILI] {healer_roblox} -> {hedef_roblox} için ':heal {hedef_roblox}' gönderiliyor!", flush=True)
+            print(f"[İLK YARDIM BAŞARILI] {healer_roblox} -> {hedef_roblox} iyileştirildi (:heal {hedef_roblox})", flush=True)
             await send_erlc_command(f":heal {hedef_roblox}")
+            await send_erlc_command(f":pm {hedef_roblox} {healer_roblox} tarafindan ilk yardim ile iyilestirildiniz.")
+            await send_erlc_command(f":pm {healer_roblox} Ilk yardim basarili! {hedef_roblox} iyilestirildi.")
 
         async def on_fail(step_interaction: Optional[discord.Interaction], sebep: str):
             if done_event.is_set():
                 return
             done_event.set()
             self.aktif_ilkyardimlar.discard(member.id)
+
+            print(f"[İLK YARDIM BAŞARISIZ] {healer_roblox} -> {hedef_roblox} başarısız oldu: {sebep}", flush=True)
 
             # Kural: "Eğer buton sıralaşında hata yaparsa veya süreye uymazsa mesaj silinsin ve işlemin başarısız olduğunu belirtsin."
             try:
@@ -706,6 +769,9 @@ class IlkYardimSistemi(commands.Cog):
                 await dm_ch.send(embed=fail_embed)
             except Exception:
                 pass
+
+            if healer_roblox:
+                asyncio.create_task(send_erlc_command(f":pm {healer_roblox} Ilk yardim basarisiz oldu: Sure doldu veya hatali asama!"))
 
         asama_view = IlkYardimAsamaView(
             user_id=member.id,

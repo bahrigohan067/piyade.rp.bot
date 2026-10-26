@@ -4,6 +4,7 @@ import aiohttp
 import asyncio
 import os
 import json
+import time
 from datetime import datetime, timezone, timedelta
 from utils.storage import load_json, save_json_atomic
 
@@ -231,6 +232,7 @@ class LiveRadar(commands.Cog):
         # İşlenen kill logları
         kill_data = load_json(KILLER_FILE, {"islenen_killer": [], "gunluk_safezone_ihlalleri": {}})
         self.islenen_killer = set(kill_data.get("islenen_killer", []))
+        self._son_taze_cekimi = 0.0
 
         # 1. Arkaplan anlık konum döngüsü (3 saniye: Panellerin anında yanıt vermesi için)
         self.arkaplan_konum_loop.start()
@@ -377,6 +379,58 @@ class LiveRadar(commands.Cog):
         if kill_logs:
             bolgeler_data = load_json(BOLGELER_FILE, TANIMLI_BOLGELER) or TANIMLI_BOLGELER
             await self._process_kill_logs(kill_logs, bolgeler_data)
+
+    async def get_taze_oyuncu_konumlari(self) -> dict:
+        """
+        İlk yardım ve ATM gibi hassas mesafe kontrolleri için en taze oyuncu konumlarını döndürür.
+        Eğer son API çağrısından sonra 1.5 saniyeden fazla zaman geçtiyse anlık olarak
+        ER:LC REST API'sinden taze veri çeker; aksi halde mevcut aktif_oyuncular önbelleğini kullanır.
+        """
+        api_key = os.getenv("ERLC_API_KEY", "").strip("'\" \r\n\t")
+        now = time.time()
+        if api_key and (now - getattr(self, "_son_taze_cekimi", 0.0) >= 1.5):
+            self._son_taze_cekimi = now
+            try:
+                session = await self.get_session()
+                headers = {'Server-Key': api_key}
+                async with session.get(
+                    'https://api.erlc.gg/v2/server?Players=true',
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=2.5)
+                ) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        players = data.get("Players", [])
+                        yeni_aktif = {}
+                        for p in players:
+                            player_str = p.get("Player", "")
+                            if not player_str:
+                                continue
+                            parts = player_str.split(":", 1)
+                            isim = parts[0].strip()
+                            r_id = parts[1].strip() if len(parts) > 1 else ""
+                            loc = p.get("Location", {})
+                            x = loc.get("LocationX", 0)
+                            y = loc.get("LocationY", loc.get("Y", "-"))
+                            z = loc.get("LocationZ", 0)
+                            posta_kodu = loc.get("PostalCode", "-")
+                            sokak = loc.get("StreetName", "-")
+                            bina = loc.get("BuildingNumber", "-")
+                            yeni_aktif[isim] = {
+                                "roblox_id": r_id,
+                                "x": round(x, 1) if isinstance(x, (int, float)) else x,
+                                "y": round(y, 1) if isinstance(y, (int, float)) else y,
+                                "z": round(z, 1) if isinstance(z, (int, float)) else z,
+                                "postal": posta_kodu,
+                                "street": sokak,
+                                "building": bina
+                            }
+                        if yeni_aktif:
+                            self.aktif_oyuncular = yeni_aktif
+                            self.son_konumlar.update(yeni_aktif)
+            except Exception:
+                pass
+        return self.aktif_oyuncular or self.son_konumlar or {}
 
     @tasks.loop(seconds=15)
     async def discord_dashboard_loop(self):
